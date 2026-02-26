@@ -10,7 +10,7 @@ NANVIX_TOOLCHAIN="${NANVIX_TOOLCHAIN:-/opt/nanvix}"
 NANVIX_PLATFORM="${NANVIX_PLATFORM:-hyperlight}"
 NANVIX_PROCESS_MODE="${NANVIX_PROCESS_MODE:-multi-process}"
 CPYTHON_TAG="${CPYTHON_TAG:-}"
-WORK_DIR="${WORK_DIR:-$ROOT_DIR/.work}"
+WORK_DIR="${WORK_DIR:-$ROOT_DIR/.nanvix}"
 DOWNLOAD_DIR="$WORK_DIR/downloads"
 SYSROOT="$WORK_DIR/sysroot"
 TEST_START="${TEST_START:-1}"
@@ -33,12 +33,14 @@ Usage: ./z <command>
 Commands:
   setup    Download Nanvix runtime and CPython release artifacts.
   test     Run smoke and functional tests on nanvixd.elf.
+  release  Package runtime artifacts and standalone bundle for release.
 
 Environment:
   NANVIX_PLATFORM     Target platform (default: hyperlight).
   NANVIX_PROCESS_MODE Process mode (default: multi-process).
   NANVIX_TOOLCHAIN    Toolchain root (default: /opt/nanvix).
   CPYTHON_TAG         CPython release tag to download (default: latest).
+  RELEASE_DIR         Output directory for release artifacts (default: ./release-assets).
   TEST_START           First test number to run (default: 1).
   TEST_END             Last test number to run (default: 999).
   TIMEOUT_SECONDS      Per-test timeout (default: 300).
@@ -247,6 +249,76 @@ cmd_test() {
   run_functional_tests "$SYSROOT"
 }
 
+cmd_release() {
+  [[ -d "$SYSROOT" ]] || die "sysroot not found at $SYSROOT. Run './z setup' first."
+  [[ -x "$SYSROOT/bin/nanvixd.elf" ]] || die "missing executable: $SYSROOT/bin/nanvixd.elf"
+  [[ -x "$SYSROOT/bin/python3.12" ]] || die "missing executable: $SYSROOT/bin/python3.12"
+
+  local release_dir="${RELEASE_DIR:-$ROOT_DIR/release-assets}"
+  local asset_prefix="${NANVIX_PLATFORM}-${NANVIX_PROCESS_MODE}"
+  local nanvix_artifacts="$WORK_DIR/nanvix-artifacts"
+  local bundle_root="$WORK_DIR/release-bundle"
+  local bundle_dir="$bundle_root/$asset_prefix"
+
+  log "release: preparing artifacts for ${asset_prefix}"
+  log "release: output directory: $release_dir"
+
+  mkdir -p "$release_dir" "$bundle_dir"
+
+  log "release: copying Nanvix runtime archives"
+  for archive in "$nanvix_artifacts"/*.tar.bz2; do
+    [[ -f "$archive" ]] || continue
+    cp -a "$archive" "$release_dir/${asset_prefix}-$(basename "$archive")"
+    log "release: added $(basename "$archive")"
+  done
+
+  log "release: copying CPython runtime archives"
+  for archive in "$DOWNLOAD_DIR"/*.tar.bz2; do
+    [[ -f "$archive" ]] || continue
+    cp -a "$archive" "$release_dir/${asset_prefix}-$(basename "$archive")"
+    log "release: added $(basename "$archive")"
+  done
+
+  log "release: building standalone bundle layout"
+  cp -a "$SYSROOT" "$bundle_dir/sysroot"
+
+  cat > "$bundle_dir/run-python.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR/sysroot"
+exec ./bin/nanvixd.elf -- ./bin/python3.12 "$@"
+EOF
+  chmod +x "$bundle_dir/run-python.sh"
+
+  cat > "$bundle_dir/README.md" <<EOF
+# Standalone Runtime Bundle
+
+Platform: ${NANVIX_PLATFORM}
+Process mode: ${NANVIX_PROCESS_MODE}
+
+## Usage
+
+After extracting the archive, enter this directory and run:
+
+./run-python.sh -c 'print(123)'
+
+Or execute a script:
+
+./run-python.sh ./your_script.py
+EOF
+
+  log "release: validating standalone launcher"
+  "$bundle_dir/run-python.sh" -c 'print(123)' >/dev/null 2>&1 || die "standalone bundle validation failed"
+
+  log "release: creating standalone tarball"
+  tar -cjf "$release_dir/standalone-runtime-${asset_prefix}.tar.bz2" -C "$bundle_root" "$asset_prefix"
+  rm -rf "$bundle_root"
+
+  log "release: standalone tarball: $release_dir/standalone-runtime-${asset_prefix}.tar.bz2"
+  log "release artifacts written to: $release_dir"
+}
+
 if [[ $# -lt 1 ]]; then
   usage
   exit 1
@@ -261,6 +333,9 @@ case "$COMMAND" in
     ;;
   test)
     cmd_test
+    ;;
+  release)
+    cmd_release
     ;;
   *)
     usage
