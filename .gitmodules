@@ -1,0 +1,10 @@
+[submodule "deps/cpython"]
+	path = deps/cpython
+	url = https://github.com/nanvix/cpython.git
+	branch = nanvix/v3.12.3
+        shallow = true
+[submodule "deps/cymem"]
+        path = deps/cymem
+        url = https://github.com/nanvix/cymem.git
+        branch = nanvix/v2.0.11
+        shallow = true
