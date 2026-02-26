@@ -26,19 +26,49 @@ export NANVIX_PROCESS_MODE=multi-process  # or single-process
 
 # Run tests
 ./z test
+
+# Package release artifacts (including standalone runtime bundle)
+./z release
 ```
+
+### Release Artifacts
+
+The `./z release` command writes artifacts to `./release-assets` by default:
+
+- Prefixed Nanvix runtime archives downloaded by `get-nanvix.sh`
+- Prefixed CPython runtime archive(s)
+- `standalone-runtime-<platform>-<process-mode>.tar.bz2`
+
+The standalone bundle includes:
+
+- `sysroot/`
+- `run-python.sh`
+- `README.md`
+
+Example standalone validation after extraction:
+
+```bash
+tar -xjf release-assets/standalone-runtime-hyperlight-multi-process.tar.bz2
+cd hyperlight-multi-process
+./run-python.sh -c 'print(123)'
+```
+
+### CI Release Flow
+
+In CI, the workflow now calls `./z release` after successful tests, uploads generated assets, and publishes them in the runtime GitHub release.
 
 ### Environment Variables
 
-| Variable | Default | Description |
-|---|---|---|
-| `NANVIX_PLATFORM` | `hyperlight` | Target platform |
-| `NANVIX_PROCESS_MODE` | `multi-process` | Process mode |
-| `NANVIX_TOOLCHAIN` | `/opt/nanvix` | Toolchain root |
-| `CPYTHON_TAG` | *(latest)* | CPython release tag to test |
-| `TEST_START` | `1` | First test number to run |
-| `TEST_END` | `999` | Last test number to run |
-| `TIMEOUT_SECONDS` | `300` | Per-test timeout |
+| Variable              | Default            | Description                                  |
+|-----------------------|--------------------|----------------------------------------------|
+| `NANVIX_PLATFORM`     | `hyperlight`       | Target platform                              |
+| `NANVIX_PROCESS_MODE` | `multi-process`    | Process mode                                 |
+| `NANVIX_TOOLCHAIN`    | `/opt/nanvix`      | Toolchain root                               |
+| `CPYTHON_TAG`         | *(latest)*         | CPython release tag to test                  |
+| `RELEASE_DIR`         | `./release-assets` | Output directory for `./z release` artifacts |
+| `TEST_START`          | `1`                | First test number to run                     |
+| `TEST_END`            | `999`              | Last test number to run                      |
+| `TIMEOUT_SECONDS`     | `300`              | Per-test timeout                             |
 
 ## License
 
