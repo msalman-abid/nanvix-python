@@ -9,6 +9,9 @@ on:
         description: "CPython release tag to test (e.g., abc1234-nanvix-def5678)"
         required: false
         default: ""
+  pull_request:
+    branches:
+      - main
   push:
     branches:
       - main
