@@ -1,0 +1,139 @@
+name: Nanvix Python CI
+
+on:
+  repository_dispatch:
+    types: [cpython-release]
+  workflow_dispatch:
+    inputs:
+      cpython_tag:
+        description: "CPython release tag to test (e.g., abc1234-nanvix-def5678)"
+        required: false
+        default: ""
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.client_payload.cpython_tag || github.ref_name || 'default' }}
+  cancel-in-progress: true
+
+jobs:
+  get-release-info:
+    runs-on: ubuntu-latest
+    outputs:
+      cpython_tag: ${{ steps.info.outputs.cpython_tag }}
+      nanvix_sha: ${{ steps.info.outputs.nanvix_sha }}
+    steps:
+      - name: Determine Release Info
+        id: info
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # Determine cpython tag from dispatch payload, manual input, or latest release
+          if [[ "${{ github.event_name }}" == "repository_dispatch" ]]; then
+            CPYTHON_TAG="${{ github.event.client_payload.cpython_tag }}"
+            NANVIX_SHA="${{ github.event.client_payload.nanvix_sha }}"
+          elif [[ -n "${{ github.event.inputs.cpython_tag || '' }}" ]]; then
+            CPYTHON_TAG="${{ github.event.inputs.cpython_tag }}"
+            NANVIX_SHA=""
+          else
+            # Fetch latest release tag from cpython repo
+            CPYTHON_TAG=$(gh api repos/nanvix/cpython/releases/latest --jq '.tag_name' 2>/dev/null || echo "")
+            NANVIX_SHA=""
+          fi
+
+          if [[ -z "$CPYTHON_TAG" ]]; then
+            echo "::error::Could not determine CPython release tag"
+            exit 1
+          fi
+
+          # Extract nanvix SHA from tag if not provided (tag format: <cpython-sha>-nanvix-<nanvix-sha>)
+          if [[ -z "$NANVIX_SHA" ]]; then
+            NANVIX_SHA=$(echo "$CPYTHON_TAG" | sed -E 's/.*-nanvix-([a-f0-9]+)$/\1/' || echo "")
+          fi
+
+          echo "cpython_tag=$CPYTHON_TAG" >> "$GITHUB_OUTPUT"
+          echo "nanvix_sha=$NANVIX_SHA" >> "$GITHUB_OUTPUT"
+          echo "CPython tag: $CPYTHON_TAG"
+          echo "Nanvix SHA: $NANVIX_SHA"
+
+  test:
+    needs: get-release-info
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: hyperlight
+            process-mode: multi-process
+          - platform: hyperlight
+            process-mode: single-process
+          - platform: microvm
+            process-mode: single-process
+          - platform: microvm
+            process-mode: multi-process
+    name: ${{ matrix.platform }}-${{ matrix.process-mode }}
+    container:
+      image: nanvix/toolchain:latest-minimal
+      options: --device /dev/kvm
+    defaults:
+      run:
+        shell: bash
+    env:
+      NANVIX_TOOLCHAIN: /opt/nanvix
+      NANVIX_PLATFORM: ${{ matrix.platform }}
+      NANVIX_PROCESS_MODE: ${{ matrix.process-mode }}
+      CPYTHON_TAG: ${{ needs.get-release-info.outputs.cpython_tag }}
+      USER: runner
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl -fsSL https://bootstrap.pypa.io/get-pip.py | python3 - --break-system-packages
+          ./z setup
+
+      - name: Test
+        run: ./z test
+
+  report-failure:
+    needs: [get-release-info, test]
+    if: >-
+      ${{ always() &&
+          github.event_name == 'repository_dispatch' &&
+          needs.test.result == 'failure' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create failure issue
+        uses: actions/github-script@v7
+        env:
+          CPYTHON_TAG: ${{ needs.get-release-info.outputs.cpython_tag }}
+          TEST_RESULT: ${{ needs.test.result }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const title = `Functional test failure for CPython ${process.env.CPYTHON_TAG}`;
+            const body = [
+              `Functional tests failed for CPython release \`${process.env.CPYTHON_TAG}\`.`,
+              `- Trigger: ${context.eventName}`,
+              `- Run: [#${context.runNumber}](${runUrl})`,
+              `- test result: ${process.env.TEST_RESULT}`,
+              '',
+              'Please investigate and take any corrective actions.'
+            ].join('\n');
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body,
+              assignees: ['ppenna']
+            });
