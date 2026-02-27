@@ -80,9 +80,26 @@ cmd_setup() {
 
   NANVIX_HOME="$SYSROOT"
 
+  # Allow git operations in containerized CI where repository ownership
+  # may differ from the executing user (e.g., root in job containers).
+  log "configuring git safe directories"
+  git config --global --add safe.directory "$ROOT_DIR"
+  git config --global --add safe.directory "$ROOT_DIR/deps/cpython"
+  git config --global --add safe.directory "$ROOT_DIR/deps/cymem"
+
   # Init/update git submodules
   log "initializing submodules"
   git submodule update --init --depth 1
+
+  # Exclude build artifacts from submodule dirty tracking
+  log "configuring submodule excludes"
+  local cpython_gitdir cymem_gitdir
+  cpython_gitdir="$(git -C "$ROOT_DIR/deps/cpython" rev-parse --git-dir)"
+  cymem_gitdir="$(git -C "$ROOT_DIR/deps/cymem" rev-parse --git-dir)"
+  grep -qxF 'Modules/cymem_builtin.c' "$cpython_gitdir/info/exclude" 2>/dev/null \
+    || echo 'Modules/cymem_builtin.c' >> "$cpython_gitdir/info/exclude"
+  grep -qxF 'libcymem.a' "$cymem_gitdir/info/exclude" 2>/dev/null \
+    || echo 'libcymem.a' >> "$cymem_gitdir/info/exclude"
 
   # Download CPython build dependencies (sqlite, zlib, openssl, bzip2, libffi)
   # via CPython's own setup script, reusing our NANVIX_HOME
