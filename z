@@ -9,7 +9,6 @@ NANVIX_HOME="${NANVIX_HOME:-}"
 NANVIX_TOOLCHAIN="${NANVIX_TOOLCHAIN:-/opt/nanvix}"
 NANVIX_PLATFORM="${NANVIX_PLATFORM:-hyperlight}"
 NANVIX_PROCESS_MODE="${NANVIX_PROCESS_MODE:-multi-process}"
-CPYTHON_TAG="${CPYTHON_TAG:-}"
 WORK_DIR="${WORK_DIR:-$ROOT_DIR/.nanvix}"
 DOWNLOAD_DIR="$WORK_DIR/downloads"
 SYSROOT="$WORK_DIR/sysroot"
@@ -31,7 +30,8 @@ usage() {
 Usage: ./z <command>
 
 Commands:
-  setup    Download Nanvix runtime and CPython release artifacts.
+  setup    Download Nanvix runtime, init submodules, fetch CPython build deps.
+  build    Build cymem and CPython from source with cymem as a built-in module.
   test     Run smoke and functional tests on nanvixd.elf.
   release  Package runtime artifacts and standalone bundle for release.
 
@@ -39,7 +39,6 @@ Environment:
   NANVIX_PLATFORM     Target platform (default: hyperlight).
   NANVIX_PROCESS_MODE Process mode (default: multi-process).
   NANVIX_TOOLCHAIN    Toolchain root (default: /opt/nanvix).
-  CPYTHON_TAG         CPython release tag to download (default: latest).
   RELEASE_DIR         Output directory for release artifacts (default: ./release-assets).
   TEST_START           First test number to run (default: 1).
   TEST_END             Last test number to run (default: 999).
@@ -81,32 +80,121 @@ cmd_setup() {
 
   NANVIX_HOME="$SYSROOT"
 
-  # Download CPython release artifacts
-  log "downloading CPython release artifacts"
-  local cpython_artifact="cpython-${NANVIX_PLATFORM}-${NANVIX_PROCESS_MODE}.tar.bz2"
-  local cpython_archive="$DOWNLOAD_DIR/$cpython_artifact"
+  # Allow git operations in containerized CI where repository ownership
+  # may differ from the executing user (e.g., root in job containers).
+  log "configuring git safe directories"
+  git config --global --add safe.directory "$ROOT_DIR"
+  git config --global --add safe.directory "$ROOT_DIR/deps/cpython"
+  git config --global --add safe.directory "$ROOT_DIR/deps/cymem"
 
-  if [[ -n "$CPYTHON_TAG" ]]; then
-    local url="https://github.com/nanvix/cpython/releases/download/${CPYTHON_TAG}/${cpython_artifact}"
-  else
-    local url="https://github.com/nanvix/cpython/releases/latest/download/${cpython_artifact}"
-  fi
+  # Init/update git submodules
+  log "initializing submodules"
+  git submodule update --init --depth 1
 
-  log "downloading: $url"
-  curl -fsSL "${curl_headers[@]}" -o "$cpython_archive" "$url"
+  # Exclude build artifacts from submodule dirty tracking
+  log "configuring submodule excludes"
+  local cpython_gitdir cymem_gitdir
+  cpython_gitdir="$(git -C "$ROOT_DIR/deps/cpython" rev-parse --git-dir)"
+  cymem_gitdir="$(git -C "$ROOT_DIR/deps/cymem" rev-parse --git-dir)"
+  grep -qxF 'Modules/cymem_builtin.c' "$cpython_gitdir/info/exclude" 2>/dev/null \
+    || echo 'Modules/cymem_builtin.c' >> "$cpython_gitdir/info/exclude"
+  grep -qxF 'libcymem.a' "$cymem_gitdir/info/exclude" 2>/dev/null \
+    || echo 'libcymem.a' >> "$cymem_gitdir/info/exclude"
 
-  # Overlay CPython onto sysroot
-  log "extracting CPython release: $cpython_artifact"
-  tar -xjf "$cpython_archive" -C "$WORK_DIR"
-
-  # Merge cpython sysroot into main sysroot
-  if [[ -d "$WORK_DIR/sysroot" && "$WORK_DIR/sysroot" != "$SYSROOT" ]]; then
-    cp -a "$WORK_DIR/sysroot/." "$SYSROOT/"
-    rm -rf "$WORK_DIR/sysroot"
-  fi
+  # Download CPython build dependencies (sqlite, zlib, openssl, bzip2, libffi)
+  # via CPython's own setup script, reusing our NANVIX_HOME
+  log "downloading CPython build dependencies"
+  (
+    cd "$ROOT_DIR/deps/cpython"
+    NANVIX_HOME="$NANVIX_HOME" \
+    NANVIX_TOOLCHAIN="$NANVIX_TOOLCHAIN" \
+    NANVIX_PLATFORM="$NANVIX_PLATFORM" \
+    NANVIX_PROCESS_MODE="$NANVIX_PROCESS_MODE" \
+    GH_TOKEN="${GH_TOKEN:-}" \
+    ./z setup
+  )
 
   log "setup complete"
   log "SYSROOT=$SYSROOT"
+}
+
+# Helper: invoke make with Nanvix cross-compilation settings
+nanvix_make() {
+  local dir="$1"
+  shift
+
+  local make_args=(
+    -f Makefile.nanvix
+    CONFIG_NANVIX=y
+    "NANVIX_HOME=$SYSROOT"
+  )
+
+  if [[ -n "$NANVIX_TOOLCHAIN" ]]; then
+    make_args+=("NANVIX_TOOLCHAIN=$NANVIX_TOOLCHAIN")
+  fi
+
+  make -C "$dir" "${make_args[@]}" "$@"
+}
+
+cmd_build() {
+  [[ -d "$SYSROOT" ]] || die "sysroot not found at $SYSROOT. Run './z setup' first."
+  [[ -d "$ROOT_DIR/deps/cpython/Include" ]] || die "cpython submodule not initialized. Run './z setup' first."
+  [[ -d "$ROOT_DIR/deps/cymem/cymem" ]] || die "cymem submodule not initialized. Run './z setup' first."
+
+  local cpython_dir="$ROOT_DIR/deps/cpython"
+  local cymem_dir="$ROOT_DIR/deps/cymem"
+
+  # Step 1: Configure CPython (generates pyconfig.h and Makefile)
+  log "configuring CPython"
+  nanvix_make "$cpython_dir" configure
+
+  # Step 2: Install CPython headers into sysroot so cymem can compile against them
+  log "installing CPython headers into sysroot"
+  mkdir -p "$SYSROOT/include/python3.12"
+  cp -a "$cpython_dir"/Include/*.h "$SYSROOT/include/python3.12/"
+  cp -a "$cpython_dir"/Include/cpython "$SYSROOT/include/python3.12/" 2>/dev/null || true
+  cp -a "$cpython_dir"/Include/internal "$SYSROOT/include/python3.12/" 2>/dev/null || true
+  cp "$cpython_dir/pyconfig.h" "$SYSROOT/include/python3.12/"
+
+  # Step 3: Build cymem from source
+  log "building cymem"
+  nanvix_make "$cymem_dir" all
+  cp "$cymem_dir/libcymem.a" "$SYSROOT/lib/"
+  log "installed libcymem.a into sysroot"
+
+  # Step 4: Prepare CPython to include cymem as a built-in static module.
+  # makesetup rejects dotted names, so we register under the flat name "_cymem".
+  # A Python-side shim (cymem/cymem.py) re-exports via `from _cymem import *`.
+  log "patching CPython for cymem built-in module"
+  cp "$ROOT_DIR/patches/cymem_builtin.c" "$cpython_dir/Modules/"
+  cat > "$cpython_dir/Modules/Setup.local" << 'SETUP'
+# Built-in extensions for Nanvix (auto-generated by nanvix-python ./z build)
+# cymem: Cython memory pool helper - linked statically as _cymem
+*static*
+_cymem cymem_builtin.c -lcymem
+SETUP
+
+  # Step 5: Build CPython with cymem linked in
+  # makesetup detects the new Setup.local and regenerates config.c
+  log "building CPython"
+  nanvix_make "$cpython_dir" build
+
+  # Step 6: Install CPython into sysroot
+  log "installing CPython into sysroot"
+  local staging="$cpython_dir/.nanvix/_install_staging"
+  rm -rf "$staging"
+  nanvix_make "$cpython_dir" install DESTDIR="$staging"
+  cp -a "$staging/sysroot/." "$SYSROOT/"
+  rm -rf "$staging"
+
+  # Step 7: Install cymem Python-side shim so "from cymem.cymem import Pool" works
+  log "installing cymem Python shim"
+  local cymem_pkg="$SYSROOT/lib/python3.12/site-packages/cymem"
+  mkdir -p "$cymem_pkg"
+  cp "$ROOT_DIR/patches/cymem_shim.py" "$cymem_pkg/cymem.py"
+
+  log "build complete"
+  log "python3.12 at: $SYSROOT/bin/python3.12"
 }
 
 install_site_packages() {
@@ -239,7 +327,7 @@ run_functional_tests() {
 cmd_test() {
   [[ -d "$SYSROOT" ]] || die "sysroot not found at $SYSROOT. Run './z setup' first."
   [[ -x "$SYSROOT/bin/nanvixd.elf" ]] || die "missing executable: $SYSROOT/bin/nanvixd.elf"
-  [[ -x "$SYSROOT/bin/python3.12" ]] || die "missing executable: $SYSROOT/bin/python3.12"
+  [[ -x "$SYSROOT/bin/python3.12" ]] || die "missing executable: $SYSROOT/bin/python3.12. Run './z build' first."
 
   local site_pkg="$SYSROOT/lib/python3.12/site-packages"
   mkdir -p "$site_pkg"
@@ -252,7 +340,7 @@ cmd_test() {
 cmd_release() {
   [[ -d "$SYSROOT" ]] || die "sysroot not found at $SYSROOT. Run './z setup' first."
   [[ -x "$SYSROOT/bin/nanvixd.elf" ]] || die "missing executable: $SYSROOT/bin/nanvixd.elf"
-  [[ -x "$SYSROOT/bin/python3.12" ]] || die "missing executable: $SYSROOT/bin/python3.12"
+  [[ -x "$SYSROOT/bin/python3.12" ]] || die "missing executable: $SYSROOT/bin/python3.12. Run './z build' first."
 
   local release_dir="${RELEASE_DIR:-$ROOT_DIR/release-assets}"
   local asset_prefix="${NANVIX_PLATFORM}-${NANVIX_PROCESS_MODE}"
@@ -267,13 +355,6 @@ cmd_release() {
 
   log "release: copying Nanvix runtime archives"
   for archive in "$nanvix_artifacts"/*.tar.bz2; do
-    [[ -f "$archive" ]] || continue
-    cp -a "$archive" "$release_dir/${asset_prefix}-$(basename "$archive")"
-    log "release: added $(basename "$archive")"
-  done
-
-  log "release: copying CPython runtime archives"
-  for archive in "$DOWNLOAD_DIR"/*.tar.bz2; do
     [[ -f "$archive" ]] || continue
     cp -a "$archive" "$release_dir/${asset_prefix}-$(basename "$archive")"
     log "release: added $(basename "$archive")"
@@ -330,6 +411,9 @@ shift
 case "$COMMAND" in
   setup)
     cmd_setup
+    ;;
+  build)
+    cmd_build
     ;;
   test)
     cmd_test
