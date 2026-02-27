@@ -119,6 +119,29 @@ jobs:
       - name: Test
         run: ./z test
 
+      - name: Collect failure logs
+        if: ${{ failure() }}
+        run: |
+          mkdir -p ci-logs
+          cp -f /tmp/*.log ci-logs/ 2>/dev/null || true
+          if [[ -d .nanvix ]]; then
+            find .nanvix -type f \( -name "*.log" -o -name "config.log" \) -print0 \
+              | xargs -0 -I{} cp -f "{}" ci-logs/ 2>/dev/null || true
+          fi
+          if [[ -d deps/cpython ]]; then
+            find deps/cpython -type f -name "config.log" -print0 \
+              | xargs -0 -I{} cp -f "{}" ci-logs/ 2>/dev/null || true
+          fi
+          ls -lah ci-logs || true
+
+      - name: Upload failure logs
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: failure-logs-${{ matrix.platform }}-${{ matrix.process-mode }}
+          path: ci-logs/*
+          if-no-files-found: warn
+
       - name: Collect runtime artifacts
         if: ${{ success() }}
         run: ./z release
