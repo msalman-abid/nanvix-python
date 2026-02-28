@@ -90,6 +90,7 @@ cmd_setup() {
   git config --global --add safe.directory "$ROOT_DIR/deps/kiwi"
   git config --global --add safe.directory "$ROOT_DIR/deps/libexpat"
   git config --global --add safe.directory "$ROOT_DIR/deps/murmurhash"
+  git config --global --add safe.directory "$ROOT_DIR/deps/preshed"
 
   # Init/update git submodules
   log "initializing submodules"
@@ -97,19 +98,22 @@ cmd_setup() {
 
   # Exclude build artifacts from submodule dirty tracking
   log "configuring submodule excludes"
-  local cpython_gitdir cymem_gitdir numpy_gitdir kiwi_gitdir libexpat_gitdir murmurhash_gitdir
+  local cpython_gitdir cymem_gitdir numpy_gitdir kiwi_gitdir libexpat_gitdir murmurhash_gitdir preshed_gitdir
   cpython_gitdir="$(git -C "$ROOT_DIR/deps/cpython" rev-parse --git-dir)"
   cymem_gitdir="$(git -C "$ROOT_DIR/deps/cymem" rev-parse --git-dir)"
   numpy_gitdir="$(git -C "$ROOT_DIR/deps/numpy" rev-parse --git-dir)"
   kiwi_gitdir="$(git -C "$ROOT_DIR/deps/kiwi" rev-parse --git-dir)"
   libexpat_gitdir="$(git -C "$ROOT_DIR/deps/libexpat" rev-parse --git-dir)"
   murmurhash_gitdir="$(git -C "$ROOT_DIR/deps/murmurhash" rev-parse --git-dir)"
+  preshed_gitdir="$(git -C "$ROOT_DIR/deps/preshed" rev-parse --git-dir)"
   grep -qxF 'Modules/cymem_builtin.c' "$cpython_gitdir/info/exclude" 2>/dev/null \
     || echo 'Modules/cymem_builtin.c' >> "$cpython_gitdir/info/exclude"
   grep -qxF 'Modules/kiwi_builtin.c' "$cpython_gitdir/info/exclude" 2>/dev/null \
     || echo 'Modules/kiwi_builtin.c' >> "$cpython_gitdir/info/exclude"
   grep -qxF 'Modules/murmurhash_builtin.c' "$cpython_gitdir/info/exclude" 2>/dev/null \
     || echo 'Modules/murmurhash_builtin.c' >> "$cpython_gitdir/info/exclude"
+  grep -qxF 'Modules/preshed_builtin.c' "$cpython_gitdir/info/exclude" 2>/dev/null \
+    || echo 'Modules/preshed_builtin.c' >> "$cpython_gitdir/info/exclude"
   grep -qxF 'libcymem.a' "$cymem_gitdir/info/exclude" 2>/dev/null \
     || echo 'libcymem.a' >> "$cymem_gitdir/info/exclude"
   grep -qxF 'builddir/' "$numpy_gitdir/info/exclude" 2>/dev/null \
@@ -134,6 +138,10 @@ cmd_setup() {
     || echo 'libmurmurhash.a' >> "$murmurhash_gitdir/info/exclude"
   grep -qxF '*.o' "$murmurhash_gitdir/info/exclude" 2>/dev/null \
     || echo '*.o' >> "$murmurhash_gitdir/info/exclude"
+  grep -qxF 'libpreshed.a' "$preshed_gitdir/info/exclude" 2>/dev/null \
+    || echo 'libpreshed.a' >> "$preshed_gitdir/info/exclude"
+  grep -qxF '*.o' "$preshed_gitdir/info/exclude" 2>/dev/null \
+    || echo '*.o' >> "$preshed_gitdir/info/exclude"
 
   # Install Cython in a virtual environment (required by the NumPy Meson build
   # to transpile .pyx files). The venv is created inside the work directory so
@@ -234,6 +242,7 @@ cmd_build() {
   [[ -d "$ROOT_DIR/deps/numpy/numpy" ]] || die "numpy submodule not initialized. Run './z setup' first."
   [[ -d "$ROOT_DIR/deps/kiwi/kiwi" ]] || die "kiwi submodule not initialized. Run './z setup' first."
   [[ -d "$ROOT_DIR/deps/murmurhash/murmurhash" ]] || die "murmurhash submodule not initialized. Run './z setup' first."
+  [[ -d "$ROOT_DIR/deps/preshed/preshed" ]] || die "preshed submodule not initialized. Run './z setup' first."
   [[ -d "$ROOT_DIR/deps/libexpat/expat" ]] || die "libexpat submodule not initialized. Run './z setup' first."
 
   # Activate the build virtual environment created by setup (provides Cython)
@@ -246,6 +255,7 @@ cmd_build() {
   local numpy_dir="$ROOT_DIR/deps/numpy"
   local kiwi_dir="$ROOT_DIR/deps/kiwi"
   local murmurhash_dir="$ROOT_DIR/deps/murmurhash"
+  local preshed_dir="$ROOT_DIR/deps/preshed"
   local libexpat_dir="$ROOT_DIR/deps/libexpat"
 
   # Step 1: Configure CPython (generates pyconfig.h and Makefile)
@@ -272,6 +282,12 @@ cmd_build() {
   nanvix_make "$murmurhash_dir" all
   cp "$murmurhash_dir/libmurmurhash.a" "$SYSROOT/lib/"
   log "installed libmurmurhash.a into sysroot"
+
+  # Step 3a1: Build preshed from source (depends on cymem and murmurhash headers)
+  log "building preshed"
+  nanvix_make "$preshed_dir" all CYMEM_DIR="$cymem_dir" MURMURHASH_DIR="$murmurhash_dir"
+  cp "$preshed_dir/libpreshed.a" "$SYSROOT/lib/"
+  log "installed libpreshed.a into sysroot"
 
   # Step 3a: Build libexpat from source
   log "building libexpat"
@@ -322,6 +338,7 @@ cmd_build() {
   cp "$ROOT_DIR/patches/cymem_builtin.c" "$cpython_dir/Modules/"
   cp "$ROOT_DIR/patches/kiwi_builtin.c" "$cpython_dir/Modules/"
   cp "$ROOT_DIR/patches/murmurhash_builtin.c" "$cpython_dir/Modules/"
+  cp "$ROOT_DIR/patches/preshed_builtin.c" "$cpython_dir/Modules/"
   cp "$ROOT_DIR/patches/numpy_libm_compat.c" "$cpython_dir/Modules/numpy_builtin/"
   local cpython_numpy_sysroot="$SYSROOT"
   if [[ -z "$NANVIX_TOOLCHAIN" || ! -x "$NANVIX_TOOLCHAIN/bin/i686-nanvix-gcc" ]]; then
@@ -339,6 +356,11 @@ _kiwi_cext kiwi_builtin.c -lkiwisolver -lstdc++
 
 # murmurhash: Cython MurmurHash bindings - linked statically as _murmurhash_mrmr
 _murmurhash_mrmr murmurhash_builtin.c -lmurmurhash -lstdc++
+
+# preshed: Cython hash tables - linked statically
+_preshed_maps preshed_builtin.c -lpreshed
+_preshed_counter preshed_builtin.c -lpreshed
+_preshed_bloom preshed_builtin.c -lpreshed
 
 # numpy built-ins (flattened names due makesetup dotted-name restrictions)
 _np_multiarray_umath numpy_builtin/_multiarray_umath_dummy.c numpy_builtin/numpy_libm_compat.c ${numpy_lib_dir}/lib_multiarray_umath_all.a ${numpy_lib_dir}/libnpymath.a
@@ -381,6 +403,16 @@ SETUP
   cp -a "$murmurhash_dir/murmurhash" "$murmurhash_pkg"
   cp "$ROOT_DIR/patches/murmurhash_mrmr_shim.py" "$murmurhash_pkg/mrmr.py"
   rm -f "$murmurhash_pkg"/*.pyx "$murmurhash_pkg"/*.pxd "$murmurhash_pkg"/*.c "$murmurhash_pkg"/*.cpp
+
+  # Step 8d: Install preshed Python package and shims
+  log "installing preshed Python package"
+  local preshed_pkg="$SYSROOT/lib/python3.12/site-packages/preshed"
+  rm -rf "$preshed_pkg"
+  cp -a "$preshed_dir/preshed" "$preshed_pkg"
+  cp "$ROOT_DIR/patches/preshed_maps_shim.py" "$preshed_pkg/maps.py"
+  cp "$ROOT_DIR/patches/preshed_counter_shim.py" "$preshed_pkg/counter.py"
+  cp "$ROOT_DIR/patches/preshed_bloom_shim.py" "$preshed_pkg/bloom.py"
+  rm -f "$preshed_pkg"/*.pyx "$preshed_pkg"/*.pxd "$preshed_pkg"/*.c
 
   # Step 9: Install numpy Python package plus Nanvix import bootstrap
   log "installing numpy Python package"
