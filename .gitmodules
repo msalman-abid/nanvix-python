@@ -28,3 +28,8 @@
 	url = https://github.com/nanvix/murmurhash.git
 	branch = nanvix/v1.0.13
 	shallow = true
+[submodule "deps/preshed"]
+	path = deps/preshed
+	url = https://github.com/nanvix/preshed.git
+	branch = nanvix/v3.0.10
+	shallow = true
