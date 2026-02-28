@@ -632,59 +632,111 @@ cmd_release() {
 
   local release_dir="${RELEASE_DIR:-$ROOT_DIR/release-assets}"
   local asset_prefix="${NANVIX_PLATFORM}-${NANVIX_PROCESS_MODE}"
-  local nanvix_artifacts="$WORK_DIR/nanvix-artifacts"
   local bundle_root="$WORK_DIR/release-bundle"
   local bundle_dir="$bundle_root/$asset_prefix"
 
   log "release: preparing artifacts for ${asset_prefix}"
   log "release: output directory: $release_dir"
 
+  rm -rf "$bundle_root"
   mkdir -p "$release_dir" "$bundle_dir"
 
-  log "release: copying Nanvix runtime archives"
-  for archive in "$nanvix_artifacts"/*.tar.bz2; do
-    [[ -f "$archive" ]] || continue
-    cp -a "$archive" "$release_dir/${asset_prefix}-$(basename "$archive")"
-    log "release: added $(basename "$archive")"
+  # Copy only the runtime-essential files into the bundle.
+  # The bundle root IS the sysroot (no nested sysroot/ directory).
+
+  # Binaries: nanvix runtime + python interpreter only
+  log "release: copying runtime binaries"
+  mkdir -p "$bundle_dir/bin"
+  local runtime_bins=(nanvixd.elf kernel.elf python3.12)
+  [[ "$NANVIX_PROCESS_MODE" == "multi-process" ]] && runtime_bins+=(linuxd.elf uservm.elf)
+  for bin in "${runtime_bins[@]}"; do
+    [[ -f "$SYSROOT/bin/$bin" ]] && cp -a "$SYSROOT/bin/$bin" "$bundle_dir/bin/"
   done
+  # Preserve python3 symlink
+  (cd "$bundle_dir/bin" && ln -sf python3.12 python3)
 
-  log "release: building standalone bundle layout"
-  cp -a "$SYSROOT" "$bundle_dir/sysroot"
+  # Python standard library + site-packages (the actual runtime payload)
+  log "release: copying Python standard library and site-packages"
+  mkdir -p "$bundle_dir/lib"
+  [[ -d "$SYSROOT/lib/python3.12" ]] && cp -a "$SYSROOT/lib/python3.12" "$bundle_dir/lib/"
 
-  cat > "$bundle_dir/run-python.sh" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR/sysroot"
-exec ./bin/nanvixd.elf -- ./bin/python3.12 "$@"
-EOF
-  chmod +x "$bundle_dir/run-python.sh"
+  # Linker script (needed by nanvixd for user process linking)
+  [[ -f "$SYSROOT/lib/user.ld" ]] && cp -a "$SYSROOT/lib/user.ld" "$bundle_dir/lib/"
 
+  # Strip build/test artifacts from the bundle
+  log "release: cleaning build and test artifacts"
+  rm -f "$bundle_dir"/test_*.py "$bundle_dir"/smoke_test_l2.py
+  rm -rf "$bundle_dir/logs" "$bundle_dir/__pycache__"
+
+  # Pre-compile all .py files to .pyc bytecode cache.
+  # This is REQUIRED: linuxd deadlocks on openat(O_CREAT|O_EXCL) when the
+  # guest tries to create new files (see nanvix/nanvix#1493).  Without
+  # pre-compiled .pyc, Python attempts to write bytecode caches on first
+  # import, triggering the deadlock.
+  log "release: pre-compiling .pyc bytecode cache"
+  local compile_python=""
+  if [[ -n "$NANVIX_TOOLCHAIN" && -x "$NANVIX_TOOLCHAIN/bin/python3" ]]; then
+    compile_python="$NANVIX_TOOLCHAIN/bin/python3"
+  elif command -v python3 >/dev/null 2>&1; then
+    compile_python="python3"
+  fi
+  if [[ -n "$compile_python" ]]; then
+    "$compile_python" -m compileall -q "$bundle_dir/lib/python3.12/" 2>/dev/null || true
+  else
+    log "warning: python3 not found — skipping .pyc pre-compilation"
+  fi
+
+  # README at the root of the bundle
   cat > "$bundle_dir/README.md" <<EOF
-# Standalone Runtime Bundle
+# Nanvix Python Runtime
 
 Platform: ${NANVIX_PLATFORM}
 Process mode: ${NANVIX_PROCESS_MODE}
 
-## Usage
+## Quick Start
 
-After extracting the archive, enter this directory and run:
+After extracting the archive, enter the directory and run:
 
-./run-python.sh -c 'print(123)'
+\`\`\`sh
+cd ${asset_prefix}
+./bin/nanvixd.elf -- ./bin/python3.12 script.py
+\`\`\`
 
-Or execute a script:
+**Note:** The \`-c\` flag only supports code without spaces (a nanvixd limitation).
+Use script files for multi-word Python commands:
 
-./run-python.sh ./your_script.py
+\`\`\`sh
+echo "import numpy; print(numpy.__version__)" > test.py
+./bin/nanvixd.elf -- ./bin/python3.12 test.py
+\`\`\`
 EOF
 
-  log "release: validating standalone launcher"
-  "$bundle_dir/run-python.sh" -c 'print(123)' >/dev/null 2>&1 || die "standalone bundle validation failed"
+  # Validate the bundle: check that all essential runtime files are present.
+  # Full functional validation (numpy, 100+ packages) is done by ./z test;
+  # this just confirms the bundle layout is correct after copying.
+  log "release: validating standalone bundle"
+  local missing=""
+  local required_files=(bin/nanvixd.elf bin/kernel.elf bin/python3.12
+           lib/python3.12/os.py lib/python3.12/site.py lib/python3.12/sitecustomize.py
+           lib/python3.12/site-packages/numpy/__init__.py)
+  [[ "$NANVIX_PROCESS_MODE" == "multi-process" ]] && required_files+=(bin/linuxd.elf bin/uservm.elf)
+  for f in "${required_files[@]}"; do
+    [[ -f "$bundle_dir/$f" ]] || missing="${missing}  $f\n"
+  done
+  [[ -x "$bundle_dir/bin/nanvixd.elf" ]] || missing="${missing}  bin/nanvixd.elf (not executable)\n"
+  [[ -x "$bundle_dir/bin/python3.12" ]] || missing="${missing}  bin/python3.12 (not executable)\n"
+  if [[ -n "$missing" ]]; then
+    die "standalone bundle validation failed — missing files:\n$missing"
+  fi
+  log "release: validation passed"
+  rm -rf "$bundle_dir/logs"
 
+  # Create the release tarball
   log "release: creating standalone tarball"
-  tar -cjf "$release_dir/standalone-runtime-${asset_prefix}.tar.bz2" -C "$bundle_root" "$asset_prefix"
+  tar -cjf "$release_dir/${asset_prefix}.tar.bz2" -C "$bundle_root" "$asset_prefix"
   rm -rf "$bundle_root"
 
-  log "release: standalone tarball: $release_dir/standalone-runtime-${asset_prefix}.tar.bz2"
+  log "release: tarball: $release_dir/${asset_prefix}.tar.bz2"
   log "release artifacts written to: $release_dir"
 }
 
