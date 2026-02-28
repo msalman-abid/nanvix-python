@@ -244,6 +244,8 @@ cmd_build() {
       git apply "$ROOT_DIR/patches/numpy_static_builtin.patch" 2>/dev/null \
         || log "numpy patch already applied or not needed"
     fi
+    git apply "$ROOT_DIR/patches/numpy_makefile_nanvix.patch" 2>/dev/null \
+      || log "numpy makefile patch already applied or not needed"
   )
 
   # Step 5: Build numpy static archives for CPython built-in modules
