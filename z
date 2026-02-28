@@ -88,6 +88,7 @@ cmd_setup() {
   git config --global --add safe.directory "$ROOT_DIR/deps/cymem"
   git config --global --add safe.directory "$ROOT_DIR/deps/numpy"
   git config --global --add safe.directory "$ROOT_DIR/deps/kiwi"
+  git config --global --add safe.directory "$ROOT_DIR/deps/libexpat"
 
   # Init/update git submodules
   log "initializing submodules"
@@ -95,11 +96,12 @@ cmd_setup() {
 
   # Exclude build artifacts from submodule dirty tracking
   log "configuring submodule excludes"
-  local cpython_gitdir cymem_gitdir numpy_gitdir kiwi_gitdir
+  local cpython_gitdir cymem_gitdir numpy_gitdir kiwi_gitdir libexpat_gitdir
   cpython_gitdir="$(git -C "$ROOT_DIR/deps/cpython" rev-parse --git-dir)"
   cymem_gitdir="$(git -C "$ROOT_DIR/deps/cymem" rev-parse --git-dir)"
   numpy_gitdir="$(git -C "$ROOT_DIR/deps/numpy" rev-parse --git-dir)"
   kiwi_gitdir="$(git -C "$ROOT_DIR/deps/kiwi" rev-parse --git-dir)"
+  libexpat_gitdir="$(git -C "$ROOT_DIR/deps/libexpat" rev-parse --git-dir)"
   grep -qxF 'Modules/cymem_builtin.c' "$cpython_gitdir/info/exclude" 2>/dev/null \
     || echo 'Modules/cymem_builtin.c' >> "$cpython_gitdir/info/exclude"
   grep -qxF 'Modules/kiwi_builtin.c' "$cpython_gitdir/info/exclude" 2>/dev/null \
@@ -118,6 +120,12 @@ cmd_setup() {
     || echo 'libkiwisolver.a' >> "$kiwi_gitdir/info/exclude"
   grep -qxF '*.o' "$kiwi_gitdir/info/exclude" 2>/dev/null \
     || echo '*.o' >> "$kiwi_gitdir/info/exclude"
+  grep -qxF 'libexpat.a' "$libexpat_gitdir/info/exclude" 2>/dev/null \
+    || echo 'libexpat.a' >> "$libexpat_gitdir/info/exclude"
+  grep -qxF '*.o' "$libexpat_gitdir/info/exclude" 2>/dev/null \
+    || echo '*.o' >> "$libexpat_gitdir/info/exclude"
+  grep -qxF 'expat_test.elf' "$libexpat_gitdir/info/exclude" 2>/dev/null \
+    || echo 'expat_test.elf' >> "$libexpat_gitdir/info/exclude"
 
   # Install Cython in a virtual environment (required by the NumPy Meson build
   # to transpile .pyx files). The venv is created inside the work directory so
@@ -217,6 +225,7 @@ cmd_build() {
   [[ -d "$ROOT_DIR/deps/cymem/cymem" ]] || die "cymem submodule not initialized. Run './z setup' first."
   [[ -d "$ROOT_DIR/deps/numpy/numpy" ]] || die "numpy submodule not initialized. Run './z setup' first."
   [[ -d "$ROOT_DIR/deps/kiwi/kiwi" ]] || die "kiwi submodule not initialized. Run './z setup' first."
+  [[ -d "$ROOT_DIR/deps/libexpat/expat" ]] || die "libexpat submodule not initialized. Run './z setup' first."
 
   # Activate the build virtual environment created by setup (provides Cython)
   if [[ -f "$WORK_DIR/venv/bin/activate" ]]; then
@@ -227,6 +236,7 @@ cmd_build() {
   local cymem_dir="$ROOT_DIR/deps/cymem"
   local numpy_dir="$ROOT_DIR/deps/numpy"
   local kiwi_dir="$ROOT_DIR/deps/kiwi"
+  local libexpat_dir="$ROOT_DIR/deps/libexpat"
 
   # Step 1: Configure CPython (generates pyconfig.h and Makefile)
   log "configuring CPython"
@@ -245,6 +255,14 @@ cmd_build() {
   nanvix_make "$cymem_dir" all
   cp "$cymem_dir/libcymem.a" "$SYSROOT/lib/"
   log "installed libcymem.a into sysroot"
+
+  # Step 3a: Build libexpat from source
+  log "building libexpat"
+  nanvix_make "$libexpat_dir" all
+  cp "$libexpat_dir/libexpat.a" "$SYSROOT/lib/"
+  cp "$libexpat_dir/expat/lib/expat.h" "$SYSROOT/include/"
+  cp "$libexpat_dir/expat/lib/expat_external.h" "$SYSROOT/include/"
+  log "installed libexpat.a into sysroot"
 
   # Step 3b: Build kiwisolver from source
   log "building kiwisolver"

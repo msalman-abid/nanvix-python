@@ -18,3 +18,8 @@
 	url = https://github.com/nanvix/kiwi.git
 	branch = nanvix/v1.4.5
 	shallow = true
+[submodule "deps/libexpat"]
+	path = deps/libexpat
+	url = https://github.com/nanvix/libexpat.git
+	branch = nanvix/v2.6.4
+	shallow = true
