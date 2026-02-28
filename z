@@ -111,6 +111,14 @@ cmd_setup() {
   grep -qxF '.nanvix-cython-bin/' "$numpy_gitdir/info/exclude" 2>/dev/null \
     || echo '.nanvix-cython-bin/' >> "$numpy_gitdir/info/exclude"
 
+  # Install Cython in a virtual environment (required by the NumPy Meson build
+  # to transpile .pyx files). The venv is created inside the work directory so
+  # it is disposable and does not pollute the system Python.
+  log "installing Cython"
+  python3 -m venv "$WORK_DIR/venv"
+  "$WORK_DIR/venv/bin/pip" install --quiet cython
+  export PATH="$WORK_DIR/venv/bin:$PATH"
+
   # Download CPython build dependencies (sqlite, zlib, openssl, bzip2, libffi)
   # via CPython's own setup script, reusing our NANVIX_HOME
   log "downloading CPython build dependencies"
@@ -200,6 +208,11 @@ cmd_build() {
   [[ -d "$ROOT_DIR/deps/cpython/Include" ]] || die "cpython submodule not initialized. Run './z setup' first."
   [[ -d "$ROOT_DIR/deps/cymem/cymem" ]] || die "cymem submodule not initialized. Run './z setup' first."
   [[ -d "$ROOT_DIR/deps/numpy/numpy" ]] || die "numpy submodule not initialized. Run './z setup' first."
+
+  # Activate the build virtual environment created by setup (provides Cython)
+  if [[ -f "$WORK_DIR/venv/bin/activate" ]]; then
+    source "$WORK_DIR/venv/bin/activate"
+  fi
 
   local cpython_dir="$ROOT_DIR/deps/cpython"
   local cymem_dir="$ROOT_DIR/deps/cymem"
