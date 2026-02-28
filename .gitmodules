@@ -23,3 +23,8 @@
 	url = https://github.com/nanvix/libexpat.git
 	branch = nanvix/v2.6.4
 	shallow = true
+[submodule "deps/murmurhash"]
+	path = deps/murmurhash
+	url = https://github.com/nanvix/murmurhash.git
+	branch = nanvix/v1.0.13
+	shallow = true
