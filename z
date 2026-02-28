@@ -31,7 +31,7 @@ Usage: ./z <command>
 
 Commands:
   setup    Download Nanvix runtime, init submodules, fetch CPython build deps.
-  build    Build cymem and CPython from source with cymem as a built-in module.
+  build    Build cymem, numpy, and CPython from source with built-in modules.
   test     Run smoke and functional tests on nanvixd.elf.
   release  Package runtime artifacts and standalone bundle for release.
 
@@ -86,20 +86,38 @@ cmd_setup() {
   git config --global --add safe.directory "$ROOT_DIR"
   git config --global --add safe.directory "$ROOT_DIR/deps/cpython"
   git config --global --add safe.directory "$ROOT_DIR/deps/cymem"
+  git config --global --add safe.directory "$ROOT_DIR/deps/numpy"
 
   # Init/update git submodules
   log "initializing submodules"
-  git submodule update --init --depth 1
+  git submodule update --init --recursive --depth 1
 
   # Exclude build artifacts from submodule dirty tracking
   log "configuring submodule excludes"
-  local cpython_gitdir cymem_gitdir
+  local cpython_gitdir cymem_gitdir numpy_gitdir
   cpython_gitdir="$(git -C "$ROOT_DIR/deps/cpython" rev-parse --git-dir)"
   cymem_gitdir="$(git -C "$ROOT_DIR/deps/cymem" rev-parse --git-dir)"
+  numpy_gitdir="$(git -C "$ROOT_DIR/deps/numpy" rev-parse --git-dir)"
   grep -qxF 'Modules/cymem_builtin.c' "$cpython_gitdir/info/exclude" 2>/dev/null \
     || echo 'Modules/cymem_builtin.c' >> "$cpython_gitdir/info/exclude"
   grep -qxF 'libcymem.a' "$cymem_gitdir/info/exclude" 2>/dev/null \
     || echo 'libcymem.a' >> "$cymem_gitdir/info/exclude"
+  grep -qxF 'builddir/' "$numpy_gitdir/info/exclude" 2>/dev/null \
+    || echo 'builddir/' >> "$numpy_gitdir/info/exclude"
+  grep -qxF 'nanvix-cross.ini' "$numpy_gitdir/info/exclude" 2>/dev/null \
+    || echo 'nanvix-cross.ini' >> "$numpy_gitdir/info/exclude"
+  grep -qxF '.nanvix-configured' "$numpy_gitdir/info/exclude" 2>/dev/null \
+    || echo '.nanvix-configured' >> "$numpy_gitdir/info/exclude"
+  grep -qxF '.nanvix-cython-bin/' "$numpy_gitdir/info/exclude" 2>/dev/null \
+    || echo '.nanvix-cython-bin/' >> "$numpy_gitdir/info/exclude"
+
+  # Install Cython in a virtual environment (required by the NumPy Meson build
+  # to transpile .pyx files). The venv is created inside the work directory so
+  # it is disposable and does not pollute the system Python.
+  log "installing Cython"
+  python3 -m venv "$WORK_DIR/venv"
+  "$WORK_DIR/venv/bin/pip" install --quiet cython
+  export PATH="$WORK_DIR/venv/bin:$PATH"
 
   # Download CPython build dependencies (sqlite, zlib, openssl, bzip2, libffi)
   # via CPython's own setup script, reusing our NANVIX_HOME
@@ -136,13 +154,69 @@ nanvix_make() {
   make -C "$dir" "${make_args[@]}" "$@"
 }
 
+# Helper: build numpy archives with Docker fallback because numpy's
+# Makefile.nanvix expects a native toolchain path even when Docker is preferred.
+nanvix_make_numpy() {
+  local numpy_dir="$1"
+  shift
+
+  if [[ -n "$NANVIX_TOOLCHAIN" && -x "$NANVIX_TOOLCHAIN/bin/i686-nanvix-gcc" ]]; then
+    nanvix_make "$numpy_dir" "$@"
+    return
+  fi
+
+  command -v docker >/dev/null 2>&1 || die "docker not found and native Nanvix toolchain is unavailable"
+  docker image inspect nanvix/toolchain:latest-minimal >/dev/null 2>&1 \
+    || die "docker image nanvix/toolchain:latest-minimal not found"
+
+  local host_cython_dir="/usr/lib/python3/dist-packages/Cython"
+  [[ -d "$host_cython_dir" ]] || die "host Cython package not found at $host_cython_dir"
+
+  local cython_shim_dir="$numpy_dir/.nanvix-cython-bin"
+  mkdir -p "$cython_shim_dir"
+  cat > "$cython_shim_dir/cython" <<'EOF'
+#!/usr/bin/env sh
+if [ "$#" -gt 0 ] && { [ "$1" = "-V" ] || [ "$1" = "--version" ]; }; then
+  python3 - <<'PY'
+import Cython
+print(f"Cython version {Cython.__version__}")
+PY
+  exit 0
+fi
+exec python3 -m Cython.Compiler.Main "$@"
+EOF
+  chmod +x "$cython_shim_dir/cython"
+  cp "$cython_shim_dir/cython" "$cython_shim_dir/cython3"
+
+  docker run --rm \
+    --user "$(id -u):$(id -g)" \
+    -v "$numpy_dir:/mnt/workspace" \
+    -v "$SYSROOT:/mnt/sysroot" \
+    -v "$SYSROOT:/sysroot" \
+    -v "$cython_shim_dir:/mnt/cython-bin:ro" \
+    -v "$host_cython_dir:/mnt/host-cython/Cython:ro" \
+    -w /mnt/workspace \
+    -e HOME=/tmp \
+    -e PYTHONPATH=/mnt/host-cython \
+    -e PATH=/mnt/cython-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    nanvix/toolchain:latest-minimal \
+    make -f Makefile.nanvix CONFIG_NANVIX=y NANVIX_HOME=/mnt/sysroot NANVIX_TOOLCHAIN=/opt/nanvix "$@"
+}
+
 cmd_build() {
   [[ -d "$SYSROOT" ]] || die "sysroot not found at $SYSROOT. Run './z setup' first."
   [[ -d "$ROOT_DIR/deps/cpython/Include" ]] || die "cpython submodule not initialized. Run './z setup' first."
   [[ -d "$ROOT_DIR/deps/cymem/cymem" ]] || die "cymem submodule not initialized. Run './z setup' first."
+  [[ -d "$ROOT_DIR/deps/numpy/numpy" ]] || die "numpy submodule not initialized. Run './z setup' first."
+
+  # Activate the build virtual environment created by setup (provides Cython)
+  if [[ -f "$WORK_DIR/venv/bin/activate" ]]; then
+    source "$WORK_DIR/venv/bin/activate"
+  fi
 
   local cpython_dir="$ROOT_DIR/deps/cpython"
   local cymem_dir="$ROOT_DIR/deps/cymem"
+  local numpy_dir="$ROOT_DIR/deps/numpy"
 
   # Step 1: Configure CPython (generates pyconfig.h and Makefile)
   log "configuring CPython"
@@ -162,24 +236,55 @@ cmd_build() {
   cp "$cymem_dir/libcymem.a" "$SYSROOT/lib/"
   log "installed libcymem.a into sysroot"
 
-  # Step 4: Prepare CPython to include cymem as a built-in static module.
+  # Step 4: Patch numpy for static built-in module support (re-entrant init)
+  log "patching numpy for static built-in support"
+  (
+    cd "$numpy_dir"
+    if ! grep -q 'Nanvix.*re-entrant' numpy/core/src/multiarray/multiarraymodule.c 2>/dev/null; then
+      git apply "$ROOT_DIR/patches/numpy_static_builtin.patch" 2>/dev/null \
+        || log "numpy patch already applied or not needed"
+    fi
+    git apply "$ROOT_DIR/patches/numpy_makefile_nanvix.patch" 2>/dev/null \
+      || log "numpy makefile patch already applied or not needed"
+  )
+
+  # Step 5: Build numpy static archives for CPython built-in modules
+  log "building numpy archives"
+  rm -rf "$numpy_dir/builddir" "$numpy_dir/.nanvix-configured" "$numpy_dir/nanvix-cross.ini"
+  nanvix_make_numpy "$numpy_dir" all
+  log "installed numpy archives into sysroot/lib/numpy"
+
+  # Step 5: Prepare CPython to include cymem and numpy as built-in static modules.
   # makesetup rejects dotted names, so we register under the flat name "_cymem".
   # A Python-side shim (cymem/cymem.py) re-exports via `from _cymem import *`.
-  log "patching CPython for cymem built-in module"
+  log "patching CPython for cymem and numpy built-in modules"
   cp "$ROOT_DIR/patches/cymem_builtin.c" "$cpython_dir/Modules/"
-  cat > "$cpython_dir/Modules/Setup.local" << 'SETUP'
+  cp "$ROOT_DIR/patches/numpy_libm_compat.c" "$cpython_dir/Modules/numpy_builtin/"
+  local cpython_numpy_sysroot="$SYSROOT"
+  if [[ -z "$NANVIX_TOOLCHAIN" || ! -x "$NANVIX_TOOLCHAIN/bin/i686-nanvix-gcc" ]]; then
+    cpython_numpy_sysroot="/mnt/sysroot"
+  fi
+  local numpy_lib_dir="${cpython_numpy_sysroot}/lib/numpy"
+  cat > "$cpython_dir/Modules/Setup.local" <<SETUP
 # Built-in extensions for Nanvix (auto-generated by nanvix-python ./z build)
 # cymem: Cython memory pool helper - linked statically as _cymem
 *static*
 _cymem cymem_builtin.c -lcymem
-SETUP
 
-  # Step 5: Build CPython with cymem linked in
+# numpy built-ins (flattened names due makesetup dotted-name restrictions)
+_np_multiarray_umath numpy_builtin/_multiarray_umath_dummy.c numpy_builtin/numpy_libm_compat.c ${numpy_lib_dir}/lib_multiarray_umath_all.a ${numpy_lib_dir}/libnpymath.a
+SETUP
+  if [[ -f "${numpy_lib_dir}/lib_pocketfft_internal.a" ]]; then
+    printf '%s\n' "_pocketfft_internal numpy_builtin/_pocketfft_internal_dummy.c ${numpy_lib_dir}/lib_pocketfft_internal.a ${numpy_lib_dir}/libnpymath.a" >> "$cpython_dir/Modules/Setup.local"
+  fi
+  rm -f "$cpython_dir/Modules/config.c"
+
+  # Step 6: Build CPython with cymem/numpy linked in
   # makesetup detects the new Setup.local and regenerates config.c
   log "building CPython"
   nanvix_make "$cpython_dir" build
 
-  # Step 6: Install CPython into sysroot
+  # Step 7: Install CPython into sysroot
   log "installing CPython into sysroot"
   local staging="$cpython_dir/.nanvix/_install_staging"
   rm -rf "$staging"
@@ -187,11 +292,45 @@ SETUP
   cp -a "$staging/sysroot/." "$SYSROOT/"
   rm -rf "$staging"
 
-  # Step 7: Install cymem Python-side shim so "from cymem.cymem import Pool" works
+  # Step 8: Install cymem Python-side shim so "from cymem.cymem import Pool" works
   log "installing cymem Python shim"
   local cymem_pkg="$SYSROOT/lib/python3.12/site-packages/cymem"
   mkdir -p "$cymem_pkg"
   cp "$ROOT_DIR/patches/cymem_shim.py" "$cymem_pkg/cymem.py"
+
+  # Step 9: Install numpy Python package plus Nanvix import bootstrap
+  log "installing numpy Python package"
+  local numpy_pkg="$SYSROOT/lib/python3.12/site-packages/numpy"
+  rm -rf "$numpy_pkg"
+  cp -a "$numpy_dir/numpy" "$numpy_pkg"
+  if [[ -f "$numpy_dir/builddir/numpy/version.py" ]]; then
+    cp "$numpy_dir/builddir/numpy/version.py" "$numpy_pkg/version.py"
+  else
+    cat > "$numpy_pkg/version.py" << 'EOF'
+version = "1.26.4"
+__version__ = version
+full_version = version
+short_version = version
+git_revision = "nanvix"
+release = True
+EOF
+  fi
+
+  cat > "$numpy_pkg/__config__.py" << 'EOF'
+def show():
+    return None
+
+def get_info(*args, **kwargs):
+    return {}
+EOF
+
+  rm -f "$numpy_pkg/__config__.py.in"
+
+  # Remove __config__.py.in template, replaced by our stub above.
+  rm -f "$numpy_pkg/__config__.py.in"
+
+  cp "$ROOT_DIR/patches/nanvix_numpy_bootstrap.py" "$SYSROOT/lib/python3.12/sitecustomize.py"
+  rm -f "$SYSROOT/lib/python3.12/site-packages/nanvix_numpy_bootstrap.pth"
 
   log "build complete"
   log "python3.12 at: $SYSROOT/bin/python3.12"

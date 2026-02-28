@@ -2,9 +2,14 @@
 	path = deps/cpython
 	url = https://github.com/nanvix/cpython.git
 	branch = nanvix/v3.12.3
-        shallow = true
+	shallow = true
 [submodule "deps/cymem"]
-        path = deps/cymem
-        url = https://github.com/nanvix/cymem.git
-        branch = nanvix/v2.0.11
-        shallow = true
+	path = deps/cymem
+	url = https://github.com/nanvix/cymem.git
+	branch = nanvix/v2.0.11
+	shallow = true
+[submodule "deps/numpy"]
+	path = deps/numpy
+	url = https://github.com/nanvix/numpy.git
+	branch = nanvix/v1.26.4
+	shallow = true
