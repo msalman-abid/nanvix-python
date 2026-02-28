@@ -6,9 +6,9 @@ as a built-in module on the Nanvix microkernel.
 
 Two files are touched:
 
-| File | Purpose |
-|------|---------|
-| `numpy/core/src/common/npy_cpu_features.c` | CPU feature detection |
+| File                                           | Purpose               |
+| ---------------------------------------------- | --------------------- |
+| `numpy/core/src/common/npy_cpu_features.c`     | CPU feature detection |
 | `numpy/core/src/multiarray/multiarraymodule.c` | Module initialisation |
 
 ---
@@ -38,7 +38,7 @@ Three separate issues are addressed in this file.
 
 ### 2a. Import-lock deadlock during `npy_cache_import`
 
-#### Problem
+#### Problem - Re-entrant import attempts
 
 `initialize_static_globals()` calls
 `npy_cache_import("numpy.exceptions", ...)` and
@@ -48,7 +48,7 @@ the very module whose `PyInit` is currently executing.  Because CPython
 holds a **per-module import lock** for the duration of `PyInit`, the
 re-entrant import attempt deadlocks.
 
-#### Fix
+#### Fix - Early-return guards
 
 Wrap both `npy_cache_import` calls in `#ifndef __nanvix__`.  The two
 global pointers (`npy_DTypePromotionError`, `npy_UFuncNoLoopError`)
@@ -62,7 +62,7 @@ would abort the process).
 
 ### 2b. Module renamed to `_np_multiarray_umath`
 
-#### Problem
+#### Problem - Circular import chain
 
 If the built-in is registered under the canonical name
 `_multiarray_umath`, any Python code that does
@@ -70,7 +70,7 @@ If the built-in is registered under the canonical name
 `PyInit` function (import-lock deadlock, same as 2a but from a different
 call site).
 
-#### Fix
+#### Fix - Change the module name
 
 On Nanvix the module name in `PyModuleDef` is changed to
 `_np_multiarray_umath` and the init function is renamed to
@@ -81,7 +81,7 @@ the circular chain.
 
 ### 2c. Pre-registration in `sys.modules`
 
-#### Problem
+#### Problem - Module is not yet registered
 
 CPython only adds a built-in module to `sys.modules` **after** `PyInit`
 returns.  Any Python-level import triggered during `PyInit` (e.g.
@@ -90,16 +90,16 @@ resolve `numpy.core._multiarray_umath` will not find the module in
 `sys.modules` yet, causing an `ImportError` or a second call to
 `PyInit`.
 
-#### Fix
+#### Fix - Insert the partially-initialised module object
 
 Immediately after `PyModule_Create`, the partially-initialised module
 object is inserted into `sys.modules` under three keys:
 
-| Key | Why |
-|-----|-----|
-| `_np_multiarray_umath` | The built-in's own name |
-| `_multiarray_umath` | The name NumPy Python code expects |
-| `numpy.core._multiarray_umath` | The fully-qualified dotted path |
+| Key                            | Why                                |
+| ------------------------------ | ---------------------------------- |
+| `_np_multiarray_umath`         | The built-in's own name            |
+| `_multiarray_umath`            | The name NumPy Python code expects |
+| `numpy.core._multiarray_umath` | The fully-qualified dotted path    |
 
 This lets the import machinery return the already-created (but not yet
 fully populated) module object instead of calling `PyInit` again.
@@ -125,7 +125,7 @@ NumPy.  It provides:
 
 ## Companion files
 
-| File | Role |
-|------|------|
-| `patches/numpy_libm_compat.c` | Provides `__kernel_tanl` stub missing from Nanvix newlib |
-| `patches/nanvix_numpy_bootstrap.py` | Runtime meta-path finder and stub modules |
+| File                                | Role                                                     |
+| ----------------------------------- | -------------------------------------------------------- |
+| `patches/numpy_libm_compat.c`       | Provides `__kernel_tanl` stub missing from Nanvix newlib |
+| `patches/nanvix_numpy_bootstrap.py` | Runtime meta-path finder and stub modules                |
