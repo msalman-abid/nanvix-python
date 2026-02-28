@@ -33,3 +33,8 @@
 	url = https://github.com/nanvix/preshed.git
 	branch = nanvix/v3.0.10
 	shallow = true
+[submodule "deps/srsly"]
+	path = deps/srsly
+	url = https://github.com/nanvix/srsly.git
+	branch = nanvix/v2.5.1
+	shallow = true
