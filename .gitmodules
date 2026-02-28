@@ -13,3 +13,8 @@
 	url = https://github.com/nanvix/numpy.git
 	branch = nanvix/v1.26.4
 	shallow = true
+[submodule "deps/kiwi"]
+	path = deps/kiwi
+	url = https://github.com/nanvix/kiwi.git
+	branch = nanvix/v1.4.5
+	shallow = true
