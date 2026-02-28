@@ -34,6 +34,7 @@ Commands:
   build    Build cymem, numpy, and CPython from source with built-in modules.
   test     Run smoke and functional tests on nanvixd.elf.
   release  Package runtime artifacts and standalone bundle for release.
+  clean    Remove build artifacts, sysroot, and work directory.
 
 Environment:
   NANVIX_PLATFORM     Target platform (default: hyperlight).
@@ -740,6 +741,68 @@ EOF
   log "release artifacts written to: $release_dir"
 }
 
+cmd_clean() {
+  log "cleaning work directory: $WORK_DIR"
+  rm -rf "$WORK_DIR"
+
+  log "cleaning release assets"
+  rm -rf "$ROOT_DIR/release-assets"
+
+  log "cleaning dependency build artifacts"
+  local deps_dir="$ROOT_DIR/deps"
+
+  # CPython
+  if [[ -f "$deps_dir/cpython/Makefile.nanvix" ]]; then
+    make -C "$deps_dir/cpython" -f Makefile.nanvix clean 2>/dev/null || true
+    rm -f "$deps_dir/cpython/Modules/Setup.local"
+    rm -f "$deps_dir/cpython/Modules/config.c"
+    rm -f "$deps_dir/cpython/Modules/cymem_builtin.c"
+    rm -f "$deps_dir/cpython/Modules/kiwi_builtin.c"
+    rm -f "$deps_dir/cpython/Modules/murmurhash_builtin.c"
+    rm -f "$deps_dir/cpython/Modules/preshed_builtin.c"
+    rm -f "$deps_dir/cpython/Modules/srsly_ujson_builtin.c"
+    rm -rf "$deps_dir/cpython/Modules/numpy_builtin/numpy_libm_compat.c"
+  fi
+
+  # cymem
+  [[ -f "$deps_dir/cymem/Makefile.nanvix" ]] \
+    && make -C "$deps_dir/cymem" -f Makefile.nanvix clean 2>/dev/null || true
+  rm -f "$deps_dir/cymem/libcymem.a"
+
+  # murmurhash
+  [[ -f "$deps_dir/murmurhash/Makefile.nanvix" ]] \
+    && make -C "$deps_dir/murmurhash" -f Makefile.nanvix clean 2>/dev/null || true
+  rm -f "$deps_dir/murmurhash/libmurmurhash.a"
+
+  # preshed
+  [[ -f "$deps_dir/preshed/Makefile.nanvix" ]] \
+    && make -C "$deps_dir/preshed" -f Makefile.nanvix clean 2>/dev/null || true
+  rm -f "$deps_dir/preshed/libpreshed.a"
+
+  # srsly
+  [[ -f "$deps_dir/srsly/Makefile.nanvix" ]] \
+    && make -C "$deps_dir/srsly" -f Makefile.nanvix clean 2>/dev/null || true
+  rm -f "$deps_dir/srsly/libsrsly_ujson.a"
+
+  # libexpat
+  [[ -f "$deps_dir/libexpat/Makefile.nanvix" ]] \
+    && make -C "$deps_dir/libexpat" -f Makefile.nanvix clean 2>/dev/null || true
+  rm -f "$deps_dir/libexpat/libexpat.a"
+
+  # kiwi
+  [[ -f "$deps_dir/kiwi/Makefile.nanvix" ]] \
+    && make -C "$deps_dir/kiwi" -f Makefile.nanvix clean 2>/dev/null || true
+  rm -f "$deps_dir/kiwi/libkiwisolver.a"
+
+  # numpy
+  rm -rf "$deps_dir/numpy/builddir"
+  rm -rf "$deps_dir/numpy/.nanvix-configured"
+  rm -rf "$deps_dir/numpy/nanvix-cross.ini"
+  rm -rf "$deps_dir/numpy/.nanvix-cython-bin"
+
+  log "clean complete"
+}
+
 if [[ $# -lt 1 ]]; then
   usage
   exit 1
@@ -760,6 +823,9 @@ case "$COMMAND" in
     ;;
   release)
     cmd_release
+    ;;
+  clean)
+    cmd_clean
     ;;
   *)
     usage
