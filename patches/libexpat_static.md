@@ -33,8 +33,8 @@ system detects `libexpat.a` and headers in the sysroot and links the
 
 ## Companion files
 
-| File | Role |
-|------|------|
-| `deps/libexpat/Makefile.nanvix` | Cross-compilation Makefile (lives in the submodule) |
-| `deps/libexpat/expat/lib/expat.h` | Public API header |
+| File                              | Role                                                 |
+| --------------------------------- | ---------------------------------------------------- |
+| `deps/libexpat/Makefile.nanvix`   | Cross-compilation Makefile (lives in the submodule)  |
+| `deps/libexpat/expat/lib/expat.h` | Public API header                                    |
 | `tests/func/test_104_libexpat.py` | Functional test: XML parsing via `xml.parsers.expat` |

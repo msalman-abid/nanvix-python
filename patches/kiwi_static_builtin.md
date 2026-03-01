@@ -6,11 +6,11 @@ This patch integrates [kiwisolver](https://github.com/nucleic/kiwi) 1.4.5
 
 Three patch files are involved:
 
-| File | Purpose |
-|------|---------|
-| `patches/kiwi_builtin.c` | C init-function shim for CPython `Modules/Setup.local` |
-| `patches/kiwi_cext_shim.py` | Python-side bridge installed as `kiwisolver/_cext.py` |
-| `z` (build script) | Build orchestration: compiles `libkiwisolver.a`, links it into CPython, installs the Python package |
+| File                        | Purpose                                                                                             |
+| --------------------------- | --------------------------------------------------------------------------------------------------- |
+| `patches/kiwi_builtin.c`    | C init-function shim for CPython `Modules/Setup.local`                                              |
+| `patches/kiwi_cext_shim.py` | Python-side bridge installed as `kiwisolver/_cext.py`                                               |
+| `z` (build script)          | Build orchestration: compiles `libkiwisolver.a`, links it into CPython, installs the Python package |
 
 ---
 
@@ -43,7 +43,7 @@ The corresponding `Modules/Setup.local` entry registers the built-in
 as `_kiwi_cext` and links against `libkiwisolver.a` plus `libstdc++`
 (required by the C++ solver code):
 
-```
+```text
 _kiwi_cext kiwi_builtin.c -lkiwisolver -lstdc++
 ```
 
@@ -51,14 +51,14 @@ _kiwi_cext kiwi_builtin.c -lkiwisolver -lstdc++
 
 ## 2. Python-side bridge (`kiwi_cext_shim.py`)
 
-### Problem
+### Problem — dotted import fails
 
 Kiwisolver's `__init__.py` imports its native extension via
 `from ._cext import ...`, which resolves to `kiwisolver._cext`.  The
 built-in module is registered under the flat name `_kiwi_cext`, so the
 standard dotted import path fails.
 
-### Fix
+### Fix — re-export shim
 
 The shim is installed as `kiwisolver/_cext.py` in the site-packages
 directory, replacing the native `.so` that would normally be there.
@@ -106,9 +106,9 @@ The `./z` build script orchestrates the following steps for kiwisolver:
 
 ## Companion files
 
-| File | Role |
-|------|------|
-| `deps/kiwi/Makefile.nanvix` | Cross-compilation Makefile (lives in the submodule) |
-| `deps/kiwi/py/kiwisolver/__init__.py` | Upstream Python package entry point (unmodified) |
-| `deps/kiwi/py/kiwisolver/exceptions.py` | Upstream exception classes (unmodified) |
-| `tests/func/test_103_kiwisolver.py` | Functional test: creates a constraint system, solves it, and verifies results |
+| File                                    | Role                                                                          |
+| --------------------------------------- | ----------------------------------------------------------------------------- |
+| `deps/kiwi/Makefile.nanvix`             | Cross-compilation Makefile (lives in the submodule)                           |
+| `deps/kiwi/py/kiwisolver/__init__.py`   | Upstream Python package entry point (unmodified)                              |
+| `deps/kiwi/py/kiwisolver/exceptions.py` | Upstream exception classes (unmodified)                                       |
+| `tests/func/test_103_kiwisolver.py`     | Functional test: creates a constraint system, solves it, and verifies results |
