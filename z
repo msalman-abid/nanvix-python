@@ -9,6 +9,7 @@ NANVIX_HOME="${NANVIX_HOME:-}"
 NANVIX_TOOLCHAIN="${NANVIX_TOOLCHAIN:-/opt/nanvix}"
 NANVIX_PLATFORM="${NANVIX_PLATFORM:-hyperlight}"
 NANVIX_PROCESS_MODE="${NANVIX_PROCESS_MODE:-multi-process}"
+NANVIX_MEMORY_SIZE="${NANVIX_MEMORY_SIZE:-128mb}"
 WORK_DIR="${WORK_DIR:-$ROOT_DIR/.nanvix}"
 DOWNLOAD_DIR="$WORK_DIR/downloads"
 SYSROOT="$WORK_DIR/sysroot"
@@ -39,6 +40,7 @@ Commands:
 Environment:
   NANVIX_PLATFORM     Target platform (default: hyperlight).
   NANVIX_PROCESS_MODE Process mode (default: multi-process).
+  NANVIX_MEMORY_SIZE  Memory size for artifacts (default: 128mb).
   NANVIX_TOOLCHAIN    Toolchain root (default: /opt/nanvix).
   RELEASE_DIR         Output directory for release artifacts (default: ./release-assets).
   TEST_START           First test number to run (default: 1).
@@ -52,13 +54,35 @@ if [[ -n "${GH_TOKEN:-}" ]]; then
   curl_headers=(-H "Authorization: Bearer ${GH_TOKEN}")
 fi
 
+# Retry a command up to N times with exponential backoff.
+# Usage: retry_cmd <max_attempts> <initial_delay> <command...>
+retry_cmd() {
+  local max_attempts="$1"
+  local delay="$2"
+  shift 2
+  local attempt
+  for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+    if "$@"; then
+      return 0
+    fi
+    if ((attempt < max_attempts)); then
+      log "attempt $attempt/$max_attempts failed (exit $?), retrying in ${delay}s..."
+      sleep "$delay"
+      delay=$((delay * 2))
+    fi
+  done
+  log "all $max_attempts attempts failed"
+  return 1
+}
+
 cmd_setup() {
   mkdir -p "$DOWNLOAD_DIR" "$SYSROOT"
 
-  # Download Nanvix runtime artifacts
+  # Download Nanvix runtime artifacts (retry to handle transient 404s
+  # during upstream release updates)
   log "downloading Nanvix runtime artifacts"
   local nanvix_artifacts="$WORK_DIR/nanvix-artifacts"
-  curl -fsSL https://raw.githubusercontent.com/nanvix/nanvix/refs/heads/dev/scripts/get-nanvix.sh | bash -s -- --force "$nanvix_artifacts"
+  retry_cmd 3 10 bash -c 'curl -fsSL https://raw.githubusercontent.com/nanvix/nanvix/refs/heads/dev/scripts/get-nanvix.sh | bash -s -- --force "$1"' _ "$nanvix_artifacts"
 
   # Find and extract the matching platform artifact
   local nanvix_archive
@@ -161,17 +185,19 @@ cmd_setup() {
   export PATH="$WORK_DIR/venv/bin:$PATH"
 
   # Download CPython build dependencies (sqlite, zlib, openssl, bzip2, libffi)
-  # via CPython's own setup script, reusing our NANVIX_HOME
+  # via CPython's own setup script, reusing our NANVIX_HOME.
+  # Retry to handle transient 404s during upstream release updates.
   log "downloading CPython build dependencies"
-  (
-    cd "$ROOT_DIR/deps/cpython"
-    NANVIX_HOME="$NANVIX_HOME" \
-    NANVIX_TOOLCHAIN="$NANVIX_TOOLCHAIN" \
-    NANVIX_PLATFORM="$NANVIX_PLATFORM" \
-    NANVIX_PROCESS_MODE="$NANVIX_PROCESS_MODE" \
-    GH_TOKEN="${GH_TOKEN:-}" \
+  retry_cmd 3 10 bash -c '
+    cd "$1/deps/cpython" &&
+    NANVIX_HOME="$2" \
+    NANVIX_TOOLCHAIN="$3" \
+    NANVIX_PLATFORM="$4" \
+    NANVIX_PROCESS_MODE="$5" \
+    NANVIX_MEMORY_SIZE="$6" \
+    GH_TOKEN="$7" \
     ./z setup
-  )
+  ' _ "$ROOT_DIR" "$NANVIX_HOME" "$NANVIX_TOOLCHAIN" "$NANVIX_PLATFORM" "$NANVIX_PROCESS_MODE" "$NANVIX_MEMORY_SIZE" "${GH_TOKEN:-}"
 
   log "setup complete"
   log "SYSROOT=$SYSROOT"
