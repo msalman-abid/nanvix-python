@@ -86,11 +86,11 @@ cmd_setup() {
 
   # Find and extract the matching platform artifact
   local nanvix_archive
-  nanvix_archive="$(find "$nanvix_artifacts" -maxdepth 1 -type f -name "*.tar.bz2" | grep -E "${NANVIX_PLATFORM}.*${NANVIX_PROCESS_MODE}" | head -1)"
+  nanvix_archive="$(find "$nanvix_artifacts" -maxdepth 1 -type f -name "*.tar.bz2" | grep -E "${NANVIX_PLATFORM}.*${NANVIX_PROCESS_MODE}.*${NANVIX_MEMORY_SIZE}" | head -1)"
   if [[ -z "$nanvix_archive" ]]; then
-    nanvix_archive="$(find "$nanvix_artifacts" -maxdepth 1 -type f -name "*.tar.bz2" | head -1)"
+    nanvix_archive="$(find "$nanvix_artifacts" -maxdepth 1 -type f -name "*.tar.bz2" | grep -E "${NANVIX_PLATFORM}.*${NANVIX_PROCESS_MODE}" | head -1)"
   fi
-  [[ -z "$nanvix_archive" ]] && die "no Nanvix artifact found for ${NANVIX_PLATFORM}-${NANVIX_PROCESS_MODE}"
+  [[ -z "$nanvix_archive" ]] && die "no Nanvix artifact found for ${NANVIX_PLATFORM}-${NANVIX_PROCESS_MODE}-${NANVIX_MEMORY_SIZE}"
   log "extracting Nanvix runtime: $(basename "$nanvix_archive")"
   tar -xjf "$nanvix_archive" -C "$SYSROOT" --strip-components=0
 
