@@ -45,6 +45,7 @@ Environment:
   RELEASE_DIR         Output directory for release artifacts (default: ./release-assets).
   TEST_START           First test number to run (default: 1).
   TEST_END             Last test number to run (default: 999).
+  EXCLUDE_TESTS        Space-separated test numbers to skip (auto-set for standalone).
   TIMEOUT_SECONDS      Per-test timeout (default: 300).
 EOF
 }
@@ -82,7 +83,13 @@ cmd_setup() {
   # during upstream release updates)
   log "downloading Nanvix runtime artifacts"
   local nanvix_artifacts="$WORK_DIR/nanvix-artifacts"
-  retry_cmd 3 10 bash -c 'curl -fsSL https://raw.githubusercontent.com/nanvix/nanvix/refs/heads/dev/scripts/get-nanvix.sh | bash -s -- --force "$1"' _ "$nanvix_artifacts"
+  retry_cmd 3 10 bash -c '
+    curl_args=(-fsSL)
+    if [[ -n "${GH_TOKEN:-}" ]]; then
+      curl_args+=(-H "Authorization: Bearer $GH_TOKEN")
+    fi
+    curl "${curl_args[@]}" https://raw.githubusercontent.com/nanvix/nanvix/refs/heads/dev/scripts/get-nanvix.sh | bash -s -- --force "$1"
+  ' _ "$nanvix_artifacts"
 
   # Find and extract the matching platform artifact
   local nanvix_archive
@@ -186,6 +193,8 @@ cmd_setup() {
 
   # Download CPython build dependencies (sqlite, zlib, openssl, bzip2, libffi)
   # via CPython's own setup script, reusing our NANVIX_HOME.
+  # These dependency libraries are only published at 128mb, so we
+  # override NANVIX_MEMORY_SIZE for this step.
   # Retry to handle transient 404s during upstream release updates.
   log "downloading CPython build dependencies"
   retry_cmd 3 10 bash -c '
@@ -194,10 +203,10 @@ cmd_setup() {
     NANVIX_TOOLCHAIN="$3" \
     NANVIX_PLATFORM="$4" \
     NANVIX_PROCESS_MODE="$5" \
-    NANVIX_MEMORY_SIZE="$6" \
-    GH_TOKEN="$7" \
+    NANVIX_MEMORY_SIZE="128mb" \
+    GH_TOKEN="$6" \
     ./z setup
-  ' _ "$ROOT_DIR" "$NANVIX_HOME" "$NANVIX_TOOLCHAIN" "$NANVIX_PLATFORM" "$NANVIX_PROCESS_MODE" "$NANVIX_MEMORY_SIZE" "${GH_TOKEN:-}"
+  ' _ "$ROOT_DIR" "$NANVIX_HOME" "$NANVIX_TOOLCHAIN" "$NANVIX_PLATFORM" "$NANVIX_PROCESS_MODE" "${GH_TOKEN:-}"
 
   log "setup complete"
   log "SYSROOT=$SYSROOT"
@@ -542,14 +551,144 @@ install_site_packages() {
   rm -f "$site_pkg/distutils-precedence.pth" 2>/dev/null || true
 }
 
+# Create a stripped-down copy of the sysroot for standalone mode.
+# Removes build artifacts, heavy non-essential packages, and development
+# files to fit the ramfs image within guest memory limits.
+# Usage: create_stripped_sysroot <source_sysroot> <dest_dir>
+create_stripped_sysroot() {
+  local src="$1"
+  local dst="$2"
+
+  log "creating stripped sysroot for standalone mode"
+  rm -rf "$dst"
+
+  # The ramfs VFS root must contain a "sysroot/" directory because CPython
+  # was compiled with prefix=/sysroot.  So the layout is:
+  #   <dst>/sysroot/bin/python3.12
+  #   <dst>/sysroot/lib/python3.12/...
+  local root="$dst/sysroot"
+  mkdir -p "$root"
+
+  # Copy only the runtime-essential binaries
+  mkdir -p "$root/bin"
+  for bin in nanvixd.elf kernel.elf python3.12 mkramfs.elf; do
+    [[ -f "$src/bin/$bin" ]] && cp -a "$src/bin/$bin" "$root/bin/"
+  done
+  (cd "$root/bin" && ln -sf python3.12 python3)
+
+  # Copy Python stdlib and site-packages
+  mkdir -p "$root/lib"
+  cp -a "$src/lib/python3.12" "$root/lib/"
+
+  # Linker script (may be needed by nanvixd)
+  [[ -f "$src/lib/user.ld" ]] && cp -a "$src/lib/user.ld" "$root/lib/"
+
+  # Remove static libraries (not needed at runtime)
+  # include/ share/ etc/ logs/ __pycache__/ are all skipped by not copying them
+
+  # Remove build/config artifacts from stdlib
+  rm -rf "$root/lib/python3.12/config-3.12"
+
+  # Remove development/IDE tools not needed at runtime
+  rm -rf "$root/lib/python3.12/idlelib"
+  rm -rf "$root/lib/python3.12/turtledemo"
+  rm -rf "$root/lib/python3.12/ensurepip"
+  rm -rf "$root/lib/python3.12/lib2to3"
+  rm -rf "$root/lib/python3.12/tkinter"
+  rm -rf "$root/lib/python3.12/pydoc_data"
+
+  # Remove test directories from stdlib and site-packages
+  find "$root/lib/python3.12" -type d \( -name 'test' -o -name 'tests' -o -name 'testing' \) -exec rm -rf {} + 2>/dev/null || true
+
+  # Remove heavy site-packages that aren't needed for most tests
+  local heavy_pkgs=(
+    plotly jupyterlab_plotly  # 162MB - visualization
+    sympy                     # 68MB  - symbolic math
+    nltk                      # 13MB  - natural language toolkit
+    reportlab                 # 8.7MB - PDF generation
+    share                     # 7.2MB - data files
+    textblob                  # 2.6MB - NLP
+    joblib                    # 2.4MB - parallelism
+  )
+  for pkg in "${heavy_pkgs[@]}"; do
+    rm -rf "$root/lib/python3.12/site-packages/$pkg"
+  done
+  # Remove dist-info directories for removed packages
+  for pkg in "${heavy_pkgs[@]}"; do
+    rm -rf "$root/lib/python3.12/site-packages/${pkg}-"*.dist-info
+    rm -rf "$root/lib/python3.12/site-packages/${pkg//-/_}-"*.dist-info
+  done
+
+  # Remove .pyc files (we'll recompile after stripping)
+  find "$root" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
+
+  # Remove .pyx, .pxd, .c, .h source files from site-packages
+  find "$root/lib/python3.12/site-packages" \( -name '*.pyx' -o -name '*.pxd' -o -name '*.c' -o -name '*.h' -o -name '*.cpp' \) -delete 2>/dev/null || true
+
+  # Pre-compile .py to .pyc (required: nanvixd VFS doesn't support creating files)
+  local compile_python=""
+  if [[ -n "$NANVIX_TOOLCHAIN" && -x "$NANVIX_TOOLCHAIN/bin/python3" ]]; then
+    compile_python="$NANVIX_TOOLCHAIN/bin/python3"
+  elif command -v python3 >/dev/null 2>&1; then
+    compile_python="python3"
+  fi
+  if [[ -n "$compile_python" ]]; then
+    "$compile_python" -m compileall -q "$root/lib/python3.12/" 2>/dev/null || true
+  fi
+
+  local size
+  size=$(du -sh "$dst" | cut -f1)
+  log "stripped sysroot: $size (from $(du -sh "$src" | cut -f1))"
+}
+
+# Build a ramfs image for standalone mode.  Reuses a cached image if the
+# sysroot directory hasn't changed (avoids re-packing for every test).
+# Usage: ensure_ramfs <sysroot>
+# Sets RAMFS_IMG to the image path.
+RAMFS_IMG=""
+STRIPPED_SYSROOT=""
+ensure_ramfs() {
+  local run_sysroot="$1"
+  if [[ -n "$RAMFS_IMG" && -f "$RAMFS_IMG" ]]; then
+    return 0
+  fi
+
+  # Create a stripped copy of the sysroot to fit in guest memory
+  STRIPPED_SYSROOT="$WORK_DIR/stripped-sysroot"
+  create_stripped_sysroot "$run_sysroot" "$STRIPPED_SYSROOT"
+
+  # Copy test scripts into the stripped sysroot (under sysroot/ to match VFS layout)
+  cp "$run_sysroot"/smoke_test_l2.py "$STRIPPED_SYSROOT/sysroot/" 2>/dev/null || true
+  cp "$run_sysroot"/test_*.py "$STRIPPED_SYSROOT/sysroot/" 2>/dev/null || true
+
+  RAMFS_IMG="/tmp/nanvix_rootfs_$$.img"
+  log "building ramfs image for standalone mode"
+  "$STRIPPED_SYSROOT/sysroot/bin/mkramfs.elf" -o "$RAMFS_IMG" "$STRIPPED_SYSROOT"
+}
+
+nanvix_run() {
+  local run_sysroot="$1"
+  local script_path="$2"
+  local log_file="$3"
+
+  cd "$run_sysroot"
+  if [[ "$NANVIX_PROCESS_MODE" == "standalone" ]]; then
+    ensure_ramfs "$run_sysroot"
+    timeout "$TIMEOUT_SECONDS" ./bin/nanvixd.elf \
+      -bin-dir ./bin -ramfs "$RAMFS_IMG" \
+      -- ./bin/python3.12 \
+      "-B /sysroot/${script_path};PYTHONHOME=/sysroot PYTHONDONTWRITEBYTECODE=1" \
+      < /dev/null > "$log_file" 2>&1 || true
+  else
+    timeout "$TIMEOUT_SECONDS" ./bin/nanvixd.elf -- ./bin/python3.12 "./$script_path" < /dev/null > "$log_file" 2>&1 || true
+  fi
+}
+
 run_smoke_test() {
   local test_sysroot="$1"
   local log_file="/tmp/smoke.log"
 
-  cp "$ROOT_DIR/tests/smoke_test_l2.py" "$test_sysroot/"
-
-  cd "$test_sysroot"
-  timeout "$TIMEOUT_SECONDS" ./bin/nanvixd.elf -- ./bin/python3.12 ./smoke_test_l2.py < /dev/null > "$log_file" 2>&1 || true
+  nanvix_run "$test_sysroot" "smoke_test_l2.py" "$log_file"
 
   if grep -q 'FAIL' "$log_file" 2>/dev/null; then
     cat "$log_file" || true
@@ -577,9 +716,6 @@ run_functional_tests() {
   local total_skip=0
   local failed_tests=""
 
-  # Copy individual test files into the test sysroot
-  cp "$ROOT_DIR"/tests/func/test_*.py "$test_sysroot/" 2>/dev/null || true
-
   # Optionally precompile stdlib and tests
   local host_python=""
   if [[ -n "$NANVIX_TOOLCHAIN" && -x "$NANVIX_TOOLCHAIN/bin/python3" ]]; then
@@ -604,9 +740,17 @@ run_functional_tests() {
     [[ -z "$test_num" ]] && test_num=0
     [[ "$test_num" -lt "$TEST_START" || "$test_num" -gt "$TEST_END" ]] && continue
 
+    # Skip tests listed in EXCLUDE_TESTS (space-separated test numbers)
+    if [[ -n "${EXCLUDE_TESTS:-}" ]]; then
+      local _skip=false
+      for _excl in $EXCLUDE_TESTS; do
+        [[ "$test_num" -eq "$_excl" ]] && _skip=true && break
+      done
+      [[ "$_skip" == "true" ]] && continue
+    fi
+
     local log_file="/tmp/${test_basename}.log"
-    cd "$test_sysroot"
-    timeout "$TIMEOUT_SECONDS" ./bin/nanvixd.elf -- ./bin/python3.12 "./$test_basename" < /dev/null > "$log_file" 2>&1 || true
+    nanvix_run "$test_sysroot" "$test_basename" "$log_file"
 
     if grep -q 'PASS' "$log_file" 2>/dev/null; then
       local test_name
@@ -620,6 +764,8 @@ run_functional_tests() {
     else
       echo "  ${test_basename}: SKIP"
       total_skip=$((total_skip + 1))
+      # Keep logs for SKIP tests to aid crash diagnosis
+      cp "$log_file" "/tmp/skip_${test_basename}.log" 2>/dev/null || true
     fi
 
     rm -f "$log_file"
@@ -643,13 +789,32 @@ cmd_test() {
   [[ -d "$SYSROOT" ]] || die "sysroot not found at $SYSROOT. Run './z setup' first."
   [[ -x "$SYSROOT/bin/nanvixd.elf" ]] || die "missing executable: $SYSROOT/bin/nanvixd.elf"
   [[ -x "$SYSROOT/bin/python3.12" ]] || die "missing executable: $SYSROOT/bin/python3.12. Run './z build' first."
+  if [[ "$NANVIX_PROCESS_MODE" == "standalone" ]]; then
+    [[ -x "$SYSROOT/bin/mkramfs.elf" ]] || die "missing executable: $SYSROOT/bin/mkramfs.elf (required for standalone mode)"
+  fi
 
   local site_pkg="$SYSROOT/lib/python3.12/site-packages"
   mkdir -p "$site_pkg"
 
   install_site_packages "$site_pkg"
+
+  # Copy all test scripts into sysroot before building ramfs (standalone
+  # mode packs the sysroot into a single image that can't be modified later)
+  cp "$ROOT_DIR/tests/smoke_test_l2.py" "$SYSROOT/"
+  cp "$ROOT_DIR"/tests/func/test_*.py "$SYSROOT/" 2>/dev/null || true
+
+  # In standalone mode, skip tests for packages stripped from the sysroot
+  # to fit the ramfs image within guest memory limits.
+  if [[ "$NANVIX_PROCESS_MODE" == "standalone" ]]; then
+    EXCLUDE_TESTS="${EXCLUDE_TESTS:-83}"  # 83=plotly (stripped)
+  fi
+
   run_smoke_test "$SYSROOT"
   run_functional_tests "$SYSROOT"
+
+  # Clean up ramfs image and stripped sysroot if created for standalone mode
+  [[ -n "$RAMFS_IMG" && -f "$RAMFS_IMG" ]] && rm -f "$RAMFS_IMG" || true
+  [[ -n "$STRIPPED_SYSROOT" && -d "$STRIPPED_SYSROOT" ]] && rm -rf "$STRIPPED_SYSROOT" || true
 }
 
 cmd_release() {

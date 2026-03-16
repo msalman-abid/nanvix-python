@@ -88,6 +88,9 @@ jobs:
             process-mode: single-process
           - platform: microvm
             process-mode: multi-process
+          - platform: microvm
+            process-mode: standalone
+            memory-size: 1024mb
     name: ${{ matrix.platform }}-${{ matrix.process-mode }}
     container:
       image: nanvix/toolchain:latest-minimal
@@ -99,6 +102,7 @@ jobs:
       NANVIX_TOOLCHAIN: /opt/nanvix
       NANVIX_PLATFORM: ${{ matrix.platform }}
       NANVIX_PROCESS_MODE: ${{ matrix.process-mode }}
+      NANVIX_MEMORY_SIZE: ${{ matrix.memory-size || '128mb' }}
       USER: runner
     steps:
       - uses: actions/checkout@v4

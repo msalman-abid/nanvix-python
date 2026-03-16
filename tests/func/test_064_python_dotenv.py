@@ -4,10 +4,10 @@ sys.stdout.reconfigure(line_buffering=True)
 try:
     from dotenv import dotenv_values
     import tempfile, os
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".env", delete=False) as f:
-        f.write("KEY=value\n")
-        f.flush()
-        vals = dotenv_values(f.name)
+    f = tempfile.NamedTemporaryFile(mode="w", suffix=".env", delete=False)
+    f.write("KEY=value\n")
+    f.close()
+    vals = dotenv_values(f.name)
     os.unlink(f.name)
     assert vals["KEY"] == "value"
     print("python-dotenv: PASS")
