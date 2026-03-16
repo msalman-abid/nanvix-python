@@ -813,8 +813,8 @@ cmd_test() {
   run_functional_tests "$SYSROOT"
 
   # Clean up ramfs image and stripped sysroot if created for standalone mode
-  [[ -n "$RAMFS_IMG" && -f "$RAMFS_IMG" ]] && rm -f "$RAMFS_IMG"
-  [[ -n "$STRIPPED_SYSROOT" && -d "$STRIPPED_SYSROOT" ]] && rm -rf "$STRIPPED_SYSROOT"
+  [[ -n "$RAMFS_IMG" && -f "$RAMFS_IMG" ]] && rm -f "$RAMFS_IMG" || true
+  [[ -n "$STRIPPED_SYSROOT" && -d "$STRIPPED_SYSROOT" ]] && rm -rf "$STRIPPED_SYSROOT" || true
 }
 
 cmd_release() {
