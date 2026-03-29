@@ -447,6 +447,25 @@ class NanvixPythonBuild(ZScript):
         if pyconfig.is_file():
             shutil.copy2(pyconfig, py_inc)
 
+        # Step 2a: Generate Python pkg-config files so that meson's Python
+        # detection finds the sysroot headers instead of the host's.
+        pkgconfig_dir = sysroot / "lib" / "pkgconfig"
+        pkgconfig_dir.mkdir(parents=True, exist_ok=True)
+        pc_content = (
+            f"prefix={sysroot}\n"
+            f"includedir=${{prefix}}/include/python3.12\n"
+            f"libdir=${{prefix}}/lib\n"
+            "\n"
+            "Name: Python\n"
+            "Description: Embed Python into an application\n"
+            "Version: 3.12.3\n"
+            "Cflags: -I${includedir}\n"
+            "Libs: -L${libdir} -lpython3.12\n"
+        )
+        for pc_name in ("python3.pc", "python3-embed.pc", "python-3.12.pc",
+                        "python-3.12-embed.pc"):
+            (pkgconfig_dir / pc_name).write_text(pc_content)
+
         # Step 3: Build cymem
         log.info("building cymem")
         self.run(*self._make_args(cymem_dir, "all"))
