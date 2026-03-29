@@ -5,14 +5,15 @@ CPython 3.12 with statically linked C extensions.
 
 ## Prerequisites
 
-| Requirement           | Notes                                                           |
-| --------------------- | --------------------------------------------------------------- |
-| **Linux x86-64 host** | Build scripts assume a Linux environment                        |
-| **Nanvix toolchain**  | `nanvix/toolchain:latest-minimal` Docker image or `/opt/nanvix` |
-| **Python 3.10+**      | Host Python for Cython, meson-python, and build orchestration   |
-| **Docker** (optional) | Used automatically when a native toolchain is not available     |
-| **KVM** (`/dev/kvm`)  | Required to run Nanvix guests during testing                    |
-| **git**               | Submodule management                                            |
+| Requirement            | Notes                                                           |
+| ---------------------- | --------------------------------------------------------------- |
+| **Linux x86-64 host**  | Build scripts assume a Linux environment                        |
+| **Nanvix toolchain**   | `nanvix/toolchain:latest-minimal` Docker image or `/opt/nanvix` |
+| **Python 3.12+**       | Host Python for nanvix-zutil, Cython, and build orchestration   |
+| **nanvix-zutil**       | `pip install nanvix-zutil` — build orchestration framework      |
+| **Docker** (optional)  | Used automatically when a native toolchain is not available     |
+| **KVM** (`/dev/kvm`)   | Required to run Nanvix guests during testing                    |
+| **git**                | Submodule management                                            |
 
 ## Commands
 
@@ -20,10 +21,10 @@ All interaction is through the `./z` build script:
 
 | Command       | Description                                                                                                                                                  |
 | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `./z setup`   | Download the Nanvix runtime, initialise git submodules, install Cython/cppy, and fetch CPython build dependencies (sqlite, zlib, openssl, bzip2, libffi).    |
+| `./z setup`   | Download the Nanvix sysroot and build dependencies via nanvix-zutil, initialise git submodules, and install Cython/cppy.                                     |
 | `./z build`   | Cross-compile all C extension libraries, patch and build CPython 3.12 with statically linked built-in modules, and install Python packages into the sysroot. |
 | `./z test`    | Install pip site-packages, run the smoke test (built-in modules), then run all 108 functional tests on `nanvixd.elf`.                                        |
-| `./z release` | Package the sysroot into a standalone runtime tarball under `./release-assets/`.                                                                             |
+| `./z release` | Package the sysroot into a standalone runtime tarball under `./dist/`.                                                                                       |
 | `./z clean`   | Remove all build artifacts, the sysroot, work directory, and release assets.                                                                                 |
 
 ## Build Walkthrough
@@ -48,39 +49,43 @@ cd nanvix-python
 
 ### Selecting a Platform
 
-Set `NANVIX_PLATFORM` and `NANVIX_PROCESS_MODE` before running:
+Set `NANVIX_MACHINE` and `NANVIX_DEPLOYMENT_MODE` before running:
 
 ```bash
-export NANVIX_PLATFORM=microvm
-export NANVIX_PROCESS_MODE=single-process
+export NANVIX_MACHINE=microvm
+export NANVIX_DEPLOYMENT_MODE=single-process
 ./z setup && ./z build && ./z test
 ```
 
 ## Environment Variables
 
-| Variable              | Default            | Description                                        |
-| --------------------- | ------------------ | -------------------------------------------------- |
-| `NANVIX_PLATFORM`     | `hyperlight`       | Target platform (`hyperlight` or `microvm`)        |
-| `NANVIX_PROCESS_MODE` | `multi-process`    | Process mode (`multi-process` or `single-process`) |
-| `NANVIX_TOOLCHAIN`    | `/opt/nanvix`      | Path to the Nanvix cross-compilation toolchain     |
-| `RELEASE_DIR`         | `./release-assets` | Output directory for `./z release` artifacts       |
-| `TEST_START`          | `1`                | First test number to run (inclusive)               |
-| `TEST_END`            | `999`              | Last test number to run (inclusive)                |
-| `TIMEOUT_SECONDS`     | `300`              | Per-test timeout in seconds                        |
-| `GH_TOKEN`            | —                  | GitHub token for authenticated API calls (CI)      |
+| Variable                  | Default            | Description                                        |
+| ------------------------- | ------------------ | -------------------------------------------------- |
+| `NANVIX_MACHINE`          | `hyperlight`       | Target platform (`hyperlight` or `microvm`)        |
+| `NANVIX_DEPLOYMENT_MODE`  | `multi-process`    | Process mode (`multi-process` or `single-process`) |
+| `NANVIX_MEMORY_SIZE`      | `128mb`            | Memory size for the sysroot                        |
+| `NANVIX_TOOLCHAIN`        | `/opt/nanvix`      | Path to the Nanvix cross-compilation toolchain     |
+| `TEST_START`              | `1`                | First test number to run (inclusive)               |
+| `TEST_END`                | `999`              | Last test number to run (inclusive)                |
+| `TIMEOUT_SECONDS`         | `300`              | Per-test timeout in seconds                        |
+| `GH_TOKEN`                | —                  | GitHub token for authenticated API calls (CI)      |
 
 ## Project Layout
 
 ```text
 nanvix-python/
-├── z                        # Build orchestration script (setup/build/test/release/clean)
+├── z                        # Cross-platform entry point (delegates to z.sh or z.ps1)
+├── z.sh                     # Linux/macOS wrapper (exec nanvix-zutil)
+├── z.ps1                    # Windows wrapper (exec nanvix-zutil)
+├── .nanvix/
+│   ├── nanvix.toml          # Package manifest (name, version, dependencies)
+│   └── z.py                 # Build script (ZScript subclass)
 ├── deps/                    # Git submodules
 │   ├── cpython/             # CPython 3.12.3 (Nanvix fork)
 │   ├── numpy/               # NumPy 1.26.4
 │   ├── cymem/               # cymem 2.0.11
 │   ├── kiwi/                # kiwisolver 1.4.2
 │   ├── libexpat/            # libexpat 2.6.4
-│   ├── libffi/              # libffi 3.4.6
 │   ├── murmurhash/          # murmurhash 1.0.13
 │   ├── preshed/             # preshed 3.0.10
 │   └── srsly/               # srsly 2.5.1
@@ -91,5 +96,5 @@ nanvix-python/
 │   └── func/                # 108 per-package functional tests
 ├── doc/                     # Documentation
 ├── scripts/                 # Helper scripts
-└── release-assets/          # Output of ./z release
+└── dist/                    # Output of ./z release
 ```
