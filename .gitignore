@@ -1,2 +1,19 @@
-.nanvix/
+# nanvix-zutil transient artifacts (sysroot, buildroot, cache, config, venv)
+.nanvix/sysroot/
+.nanvix/buildroot/
+.nanvix/cache/
+.nanvix/env.json
+.nanvix/.config
+.nanvix/venv/
+.nanvix/nanvix.lock
+.nanvix/stripped-sysroot/
+.nanvix/release-bundle/
+.nanvix/downloads/
+.nanvix/nanvix-artifacts/
+.nanvix/extracted/
+.nanvix/env.sh
+
+# Release artifacts
 release-assets/
+dist/
+
