@@ -9,7 +9,7 @@ on:
   repository_dispatch:
     types: [ cpython-release ]
   push:
-    branches: [ "main", "nanvix/**" ]
+    branches: [ "main" ]
   pull_request:
     branches: [ "main", "nanvix/**" ]
   workflow_dispatch:
