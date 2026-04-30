@@ -6,8 +6,8 @@ nanvix-version = "latest"
 [builds]
 [builds.matrix]
 platforms = ["microvm"]
-modes = ["multi-process", "single-process"]
-memory = ["128mb"]
+modes = ["standalone"]
+memory = ["256mb"]
 
 [dependencies]
 cpython = "3.12.3"
