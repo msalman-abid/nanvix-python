@@ -33,6 +33,7 @@ jobs:
       process-modes: "[\"standalone\"]"
       memory-sizes: "[\"256mb\"]"
       caller-event-name: ${{ github.event_name }}
+      windows-test: false
       release-notes-extra: |
         CPython 3.12.3 distribution for Nanvix with pure Python pip packages.
     secrets:
