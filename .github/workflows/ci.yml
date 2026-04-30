@@ -42,44 +42,69 @@ jobs:
   windows-release:
     needs: ci
     if: github.event_name != 'pull_request'
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     env:
-      NANVIX_MACHINE: microvm
-      NANVIX_DEPLOYMENT_MODE: standalone
-      NANVIX_MEMORY_SIZE: 256mb
-      NANVIX_VERSION: ${{ needs.ci.outputs.nanvix_tag }}
+      RELEASE_TAG: ${{ needs.ci.outputs.package_version }}-nanvix-${{ needs.ci.outputs.nanvix_version }}
+      NANVIX_TAG: ${{ needs.ci.outputs.nanvix_tag }}
     steps:
-      - uses: actions/checkout@v5
-
-      - name: Install nanvix-zutil
+      - name: Download standalone tarball from release
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
-          NANVIX_ZUTIL_VERSION: "v0.7.26"
-        shell: pwsh
         run: |
-          $jq = '.assets[] | select(.name | endswith(".whl")) | .browser_download_url'
-          $wheel = gh api "repos/nanvix/zutils/releases/tags/$env:NANVIX_ZUTIL_VERSION" --jq $jq
-          python -m pip install $wheel
+          set -euo pipefail
+          gh release download "$RELEASE_TAG" \
+            --repo "${{ github.repository }}" \
+            --pattern "*standalone*.tar.bz2" \
+            --dir release-download
+          ls -la release-download/
 
-      - name: Setup
+      - name: Download Nanvix Windows binaries
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
-        shell: pwsh
-        run: nanvix-zutil setup
-
-      - name: Build
-        shell: pwsh
-        run: nanvix-zutil build
-
-      - name: Release
-        shell: pwsh
-        run: nanvix-zutil release
-
-      - name: Upload Windows release asset
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
-        shell: pwsh
         run: |
-          $tag = "${{ needs.ci.outputs.package_version }}-nanvix-${{ needs.ci.outputs.nanvix_version }}"
-          $asset = Get-ChildItem dist/*.zip -ErrorAction Stop
-          gh release upload $tag $asset.FullName --clobber
+          set -euo pipefail
+          gh release download "$NANVIX_TAG" \
+            --repo nanvix/nanvix \
+            --pattern "nanvix-windows-x86-microvm-standalone*256mb*.zip" \
+            --dir nanvix-windows
+          ls -la nanvix-windows/
+
+      - name: Create Windows zip
+        run: |
+          set -euo pipefail
+
+          # Extract the standalone tarball
+          TARBALL=$(find release-download -name "*standalone*.tar.bz2" | head -1)
+          echo "Using tarball: $TARBALL"
+          mkdir -p extract
+          tar -xjf "$TARBALL" -C extract
+
+          # Find the extracted directory name
+          DIST_DIR=$(find extract -mindepth 1 -maxdepth 1 -type d | head -1)
+          DIR_NAME=$(basename "$DIST_DIR")
+          echo "Distribution directory: $DIR_NAME"
+
+          # Extract Nanvix Windows zip to get host binaries
+          WINZIP=$(find nanvix-windows -name "*.zip" | head -1)
+          echo "Using Nanvix Windows zip: $WINZIP"
+          mkdir -p nanvix-win-extract
+          unzip -q "$WINZIP" -d nanvix-win-extract
+
+          # Replace Linux host binary with Windows host binary
+          rm -f "$DIST_DIR/bin/nanvixd.elf"
+          cp nanvix-win-extract/nanvixd.exe "$DIST_DIR/bin/nanvixd.exe"
+
+          # Create the Windows zip
+          ZIP_NAME="${DIR_NAME}.zip"
+          (cd extract && zip -r "../${ZIP_NAME}" "$DIR_NAME")
+          echo "zip_name=$ZIP_NAME" >> "$GITHUB_ENV"
+          echo "Created: $ZIP_NAME ($(stat -c%s "$ZIP_NAME") bytes)"
+
+      - name: Upload zip to release
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "$RELEASE_TAG" \
+            --repo "${{ github.repository }}" \
+            "${{ env.zip_name }}" --clobber
+          echo "Uploaded ${{ env.zip_name }} to release $RELEASE_TAG"
