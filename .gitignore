@@ -12,8 +12,15 @@
 .nanvix/nanvix-artifacts/
 .nanvix/extracted/
 .nanvix/env.sh
+.nanvix/mini-sysroot/
+.nanvix/__pycache__/
+.nanvix/nanvix_rootfs.img
+.nanvix/.ramfs-built
+.nanvix/.crlf-fixed
 
 # Release artifacts
 release-assets/
 dist/
+elf-binaries/
 
+logs/
