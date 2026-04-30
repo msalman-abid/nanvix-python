@@ -18,7 +18,6 @@ Usage:
 from __future__ import annotations
 
 import hashlib
-import io
 import os
 import re
 import shutil
@@ -38,7 +37,7 @@ from nanvix_zutil import (
 )
 from nanvix_zutil.docker import docker_available
 from nanvix_zutil.exitcodes import EXIT_BUILD_FAILURE, EXIT_MISSING_DEP, EXIT_TEST_FAILURE
-from nanvix_zutil.github import download_release_asset, resolve_release_with_fallback
+from nanvix_zutil.github import download_release_asset, resolve_release
 
 # Per-test timeout in seconds (overridable via TIMEOUT_SECONDS env var).
 _DEFAULT_TIMEOUT = 300
@@ -471,8 +470,8 @@ class NanvixPythonBuild(ZScript):
         # Resolve the cpython version (suffixed with nanvix sysroot version)
         cpython_version = self.manifest.version
         sysroot_tag = self.config.get("sysroot_tag", "")
+        nanvix_ver = sysroot_tag.removeprefix("v") if sysroot_tag else ""
         if sysroot_tag:
-            nanvix_ver = sysroot_tag.removeprefix("v")
             version_specifier = f"{cpython_version}-nanvix-{nanvix_ver}"
         else:
             version_specifier = cpython_version
@@ -488,11 +487,10 @@ class NanvixPythonBuild(ZScript):
 
         log.info(f"downloading pre-built CPython ({asset_name})")
 
-        # Resolve release with fallback
-        release, _ = resolve_release_with_fallback(
+        # Resolve release
+        release = resolve_release(
             repo="nanvix/cpython",
             version_specifier=version_specifier,
-            base_version=nanvix_ver if sysroot_tag else cpython_version,
             gh_token=self.config.get("NANVIX_GH_TOKEN"),
         )
 
@@ -511,7 +509,6 @@ class NanvixPythonBuild(ZScript):
             for member in tf.getmembers():
                 if not member.isfile():
                     continue
-                member_path = Path(member.name)
 
                 # bin/python.elf → sysroot/bin/python3.12
                 if member.name == "bin/python.elf":
@@ -644,7 +641,7 @@ class NanvixPythonBuild(ZScript):
 
         test_start = int(os.environ.get("TEST_START", "1"))
         test_end = int(os.environ.get("TEST_END", "999"))
-        excluded = set(exclude_tests.split()) if exclude_tests else set()
+        excluded: set[str] = set(exclude_tests.split()) if exclude_tests else set()
 
         # Precompile stdlib and tests
         host_python = self._host_python()

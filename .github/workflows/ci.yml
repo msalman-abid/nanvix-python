@@ -44,7 +44,8 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     env:
-      RELEASE_TAG: ${{ needs.ci.outputs.package_version }}-nanvix-${{ needs.ci.outputs.nanvix_version }}
+      RELEASE_TAG: ${{ needs.ci.outputs.package_version }}-nanvix-${{
+        needs.ci.outputs.nanvix_version }}
       NANVIX_TAG: ${{ needs.ci.outputs.nanvix_tag }}
     steps:
       - name: Download standalone tarball from release
