@@ -12,8 +12,11 @@
 .nanvix/nanvix-artifacts/
 .nanvix/extracted/
 .nanvix/env.sh
+.nanvix/mini-sysroot/
+.nanvix/__pycache__/
 
 # Release artifacts
 release-assets/
 dist/
 
+logs/

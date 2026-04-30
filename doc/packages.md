@@ -1,17 +1,22 @@
 # Supported Python Packages
 
-108 pure-Python packages are installed from pip and validated by
+Pure Python packages are installed from pip and validated by
 functional tests. They are split across two requirements files.
 
 > Packages listed without a version are unpinned and install the latest
 > compatible release at build time. To pin all versions, edit the
 > requirements files directly.
+>
+> **Note:** C extension packages (NumPy, cffi, cymem, reportlab) have
+> been temporarily removed. Packages with optional C accelerators
+> (MarkupSafe, charset-normalizer, PyYAML, msgpack, wrapt) are included
+> and use their pure Python fallback.
 
 ## Base Packages
 
 Source: [`requirements/site-packages-base.txt`](../requirements/site-packages-base.txt)
 
-### 70 packages — core utilities, typing, networking, data, NLP ecosystem support
+### Core utilities, typing, networking, data, NLP ecosystem support
 
 | Package            | Version |
 | ------------------ | ------- |
@@ -74,7 +79,7 @@ Source: [`requirements/site-packages-base.txt`](../requirements/site-packages-ba
 
 Source: [`requirements/site-packages-extra.txt`](../requirements/site-packages-extra.txt)
 
-### 38 packages — web, serialisation, templating, scientific, spreadsheet
+### Web, serialisation, templating, scientific, spreadsheet
 
 | Package          | Version |
 | ---------------- | ------- |
@@ -104,7 +109,6 @@ Source: [`requirements/site-packages-extra.txt`](../requirements/site-packages-e
 | pylatex          | 1.4.2   |
 | PyPDF2           | 3.0.1   |
 | pypdf            | —       |
-| reportlab        | —       |
 | google-pasta     | 0.2.0   |
 | nltk             | —       |
 | python-dateutil  | 2.8.2   |
@@ -129,6 +133,4 @@ Source: [`requirements/site-packages-extra.txt`](../requirements/site-packages-e
 | tomli            | —       |
 | typing_inspect   | —       |
 | wrapt            | 2.0.1   |
-| cffi             | 1.17.1  |
-| cymem            | —       |
 | plumbum          | 1.9.0   |

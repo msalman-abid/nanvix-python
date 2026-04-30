@@ -9,9 +9,12 @@ CPython built-in modules: `sys`, `os`, `json`, `collections`, `math`,
 
 ## Functional Tests
 
-108 individual test files in [`tests/func/`](../tests/func/) each
+Individual test files in [`tests/func/`](../tests/func/) each
 cover one package. Tests are numbered `test_001_packaging.py` through
-`test_108_srsly.py` and run sequentially on `nanvixd.elf`.
+`test_105_libffi.py` and run sequentially on `nanvixd.elf`.
+
+> **Note:** Tests for C extension packages (numpy, cymem, kiwisolver,
+> murmurhash, preshed, srsly, cffi) have been temporarily removed.
 
 ### Running Tests
 
@@ -24,8 +27,8 @@ cover one package. Tests are numbered `test_001_packaging.py` through
 Use `TEST_START` and `TEST_END` to restrict the range:
 
 ```bash
-# Run only numpy and kiwisolver tests
-TEST_START=102 TEST_END=103 ./z test
+# Run only tests 1 through 10
+TEST_START=1 TEST_END=10 ./z test
 ```
 
 ### Per-test Timeout
