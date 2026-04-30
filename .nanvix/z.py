@@ -799,7 +799,34 @@ class NanvixPythonBuild(ZScript):
                 capture_output=True,
             )
 
+        # Build and include ramfs image for standalone mode
+        if mode == "standalone":
+            mkramfs = sysroot / "bin" / _mkramfs_binary()
+            if not mkramfs.is_file():
+                log.fatal(
+                    f"{_mkramfs_binary()} not found (required for standalone mode).",
+                    code=EXIT_MISSING_DEP,
+                    hint="Run `./z setup` first.",
+                )
+            log.info("release: building ramfs image")
+            try:
+                self._ensure_ramfs(sysroot)
+                if self._ramfs_img and self._ramfs_img.is_file():
+                    shutil.copy2(self._ramfs_img, bundle_dir / "nanvix_rootfs.img")
+                else:
+                    log.fatal(
+                        "ramfs image not found after build.",
+                        code=EXIT_BUILD_FAILURE,
+                        hint="Ensure `./z build` completed successfully.",
+                    )
+            finally:
+                self._cleanup_ramfs()
+
         # README
+        if mode == "standalone":
+            run_cmd = f"./bin/{nanvixd_name} -ramfs nanvix_rootfs.img -- ./bin/python3.12"
+        else:
+            run_cmd = f"./bin/{nanvixd_name} -- ./bin/python3.12"
         readme_text = (
             f"# Nanvix Python Runtime\n\n"
             f"Platform: {platform_name}\n"
@@ -808,14 +835,14 @@ class NanvixPythonBuild(ZScript):
             f"After extracting the archive, enter the directory and run:\n\n"
             f"```sh\n"
             f"cd {asset_prefix}\n"
-            f"./bin/{nanvixd_name} -- ./bin/python3.12 script.py\n"
+            f"{run_cmd} script.py\n"
             f"```\n\n"
             f"**Note:** The `-c` flag only supports code without spaces "
             f"(a nanvixd limitation).\n"
             f"Use script files for multi-word Python commands:\n\n"
             f"```sh\n"
             f'echo "print(\'Hello from Nanvix!\')" > test.py\n'
-            f"./bin/{nanvixd_name} -- ./bin/python3.12 test.py\n"
+            f"{run_cmd} test.py\n"
             f"```\n"
         )
         (bundle_dir / "README.md").write_text(readme_text)
@@ -826,6 +853,8 @@ class NanvixPythonBuild(ZScript):
             f"bin/{nanvixd_name}", "bin/kernel.elf", "bin/python3.12",
             "lib/python3.12/os.py", "lib/python3.12/site.py",
         ]
+        if mode == "standalone":
+            required.append("nanvix_rootfs.img")
         if mode == "multi-process":
             required.extend(["bin/linuxd.elf", "bin/uservm.elf"])
         missing = [f for f in required if not (bundle_dir / f).is_file()]
