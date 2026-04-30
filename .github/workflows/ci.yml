@@ -38,3 +38,48 @@ jobs:
     secrets:
       GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
       DISPATCH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
+
+  windows-release:
+    needs: ci
+    if: github.event_name != 'pull_request'
+    runs-on: windows-latest
+    env:
+      NANVIX_MACHINE: microvm
+      NANVIX_DEPLOYMENT_MODE: standalone
+      NANVIX_MEMORY_SIZE: 256mb
+      NANVIX_VERSION: ${{ needs.ci.outputs.nanvix_tag }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install nanvix-zutil
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
+          NANVIX_ZUTIL_VERSION: "v0.7.26"
+        shell: pwsh
+        run: |
+          $jq = '.assets[] | select(.name | endswith(".whl")) | .browser_download_url'
+          $wheel = gh api "repos/nanvix/zutils/releases/tags/$env:NANVIX_ZUTIL_VERSION" --jq $jq
+          python -m pip install $wheel
+
+      - name: Setup
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: nanvix-zutil setup
+
+      - name: Build
+        shell: pwsh
+        run: nanvix-zutil build
+
+      - name: Release
+        shell: pwsh
+        run: nanvix-zutil release
+
+      - name: Upload Windows release asset
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $tag = "${{ needs.ci.outputs.package_version }}-nanvix-${{ needs.ci.outputs.nanvix_version }}"
+          $asset = Get-ChildItem dist/*.zip -ErrorAction Stop
+          gh release upload $tag $asset.FullName --clobber
