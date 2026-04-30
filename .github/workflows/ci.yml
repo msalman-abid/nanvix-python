@@ -18,6 +18,7 @@ permissions:
   contents: write
   actions: write
   issues: write
+  pull-requests: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name || github.ref || 'default' }}
@@ -36,3 +37,4 @@ jobs:
         CPython 3.12.3 distribution for Nanvix with pure Python pip packages.
     secrets:
       GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
+      DISPATCH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
