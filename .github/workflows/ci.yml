@@ -39,13 +39,86 @@ jobs:
       GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
       DISPATCH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
 
-  windows-release:
+  release:
     needs: ci
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.tag.outputs.release_tag }}
     env:
-      RELEASE_TAG: ${{ needs.ci.outputs.package_version }}-nanvix-${{
-        needs.ci.outputs.nanvix_version }}
+      PACKAGE_NAME: ${{ needs.ci.outputs.package_name }}
+      PACKAGE_VERSION: ${{ needs.ci.outputs.package_version }}
+      NANVIX_VERSION: ${{ needs.ci.outputs.nanvix_version }}
+    steps:
+      - name: Compute release tag
+        id: tag
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          RELEASE_TAG="${PACKAGE_VERSION}-nanvix-${NANVIX_VERSION}-${SHORT_SHA}"
+          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "Release tag: $RELEASE_TAG"
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: release-artifacts
+          pattern: ${{ env.PACKAGE_NAME }}-${{ env.PACKAGE_VERSION }}-*
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.tag.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          find release-artifacts \( -name "*.tar.bz2" -o -name "*.zip" \) \
+            -exec cp {} release-assets/ \; 2>/dev/null || true
+
+          printf -v NOTES 'Automated build from branch %s.\n\n**Build:** [#%s](%s)\n**Commit:** [`%s`](%s)\n\nCPython 3.12.3 distribution for Nanvix with pure Python pip packages.' \
+            "${{ github.ref_name }}" \
+            "${{ github.run_number }}" \
+            "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            "${GITHUB_SHA::7}" \
+            "${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}"
+
+          # Collect assets safely (nullglob prevents literal glob on empty dir)
+          shopt -s nullglob
+          assets=(release-assets/*)
+          shopt -u nullglob
+
+          # Fail if no assets were produced — all matrix builds must have failed
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "::error::No release assets found — all builds may have failed"
+            exit 1
+          fi
+
+          # Idempotent: if the release already exists (e.g., rerun or scheduled
+          # trigger for the same commit), update it instead of failing.
+          if gh release view "$RELEASE_TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" \
+              --repo "${{ github.repository }}" \
+              --title "Build ${GITHUB_SHA::7}" \
+              --notes "$NOTES" \
+              --latest
+            gh release upload "$RELEASE_TAG" \
+              --repo "${{ github.repository }}" \
+              --clobber \
+              "${assets[@]}"
+          else
+            gh release create "$RELEASE_TAG" \
+              --repo "${{ github.repository }}" \
+              --title "Build ${GITHUB_SHA::7}" \
+              --notes "$NOTES" \
+              --latest \
+              "${assets[@]}"
+          fi
+
+  windows-release:
+    needs: [ ci, release ]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ needs.release.outputs.release_tag }}
       NANVIX_TAG: ${{ needs.ci.outputs.nanvix_tag }}
     steps:
       - name: Download standalone tarball from release
