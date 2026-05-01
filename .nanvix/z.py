@@ -481,6 +481,22 @@ class NanvixPythonBuild(ZScript):
 
         sentinel.write_text(req_hash)
 
+    def _install_pil_shim(self, site_pkg: Path) -> None:
+        """Copy the pure-Python PIL shim into site-packages.
+
+        Replaces Pillow's C extension with lightweight header-only
+        parsing that python-pptx needs for image handling.
+        """
+        pil_src = self.repo_root / "patches" / "PIL"
+        pil_dst = site_pkg / "PIL"
+        if not pil_src.is_dir():
+            log.warning("patches/PIL not found; skipping PIL shim installation")
+            return
+        if pil_dst.exists():
+            shutil.rmtree(pil_dst)
+        shutil.copytree(pil_src, pil_dst)
+        log.info(f"installed PIL shim into {pil_dst}")
+
     # ------------------------------------------------------------------
     # Lifecycle hooks
     # ------------------------------------------------------------------
@@ -582,6 +598,9 @@ class NanvixPythonBuild(ZScript):
         site_pkg = sysroot / "lib" / "python3.12" / "site-packages"
         site_pkg.mkdir(parents=True, exist_ok=True)
         self._install_site_packages(site_pkg)
+
+        # Install PIL shim (pure-Python Pillow replacement for python-pptx)
+        self._install_pil_shim(site_pkg)
 
         # Build ramfs image for standalone deployment
         if self.config.deployment_mode == "standalone":
