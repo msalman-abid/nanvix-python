@@ -594,9 +594,22 @@ class NanvixPythonBuild(ZScript):
             shutil.copy2(t, sysroot)
 
         # Build ramfs for standalone mode (needed fresh each test run
-        # since test scripts are copied into it)
+        # since test scripts are copied into it).
+        # When NANVIX_PREBUILT_RAMFS is set (e.g. by CI to reuse the
+        # Linux-built ramfs on Windows), skip the rebuild entirely.
         if deployment == "standalone":
-            self._ensure_ramfs(sysroot)
+            prebuilt = os.environ.get("NANVIX_PREBUILT_RAMFS")
+            if prebuilt:
+                p = Path(prebuilt)
+                if not p.is_file():
+                    log.fatal(
+                        f"NANVIX_PREBUILT_RAMFS points to non-existent file: {p}",
+                        code=EXIT_MISSING_DEP,
+                    )
+                log.info(f"using pre-built ramfs: {p}")
+                self._ramfs_img = p
+            else:
+                self._ensure_ramfs(sysroot)
 
         # Standalone exclusions
         exclude_tests = os.environ.get("EXCLUDE_TESTS", "")
