@@ -36,7 +36,11 @@ from nanvix_zutil import (
     log,
 )
 from nanvix_zutil.docker import docker_available
-from nanvix_zutil.exitcodes import EXIT_BUILD_FAILURE, EXIT_MISSING_DEP, EXIT_TEST_FAILURE
+from nanvix_zutil.exitcodes import (
+    EXIT_BUILD_FAILURE,
+    EXIT_MISSING_DEP,
+    EXIT_TEST_FAILURE,
+)
 from nanvix_zutil.github import download_release_asset, resolve_release
 
 # Per-test timeout in seconds (overridable via TIMEOUT_SECONDS env var).
@@ -163,7 +167,9 @@ class NanvixPythonBuild(ZScript):
             h.update(cpython_sentinel.read_bytes())
 
         # Factor in site-packages sentinel
-        site_sentinel = sysroot / "lib" / "python3.12" / "site-packages" / ".nanvix-installed"
+        site_sentinel = (
+            sysroot / "lib" / "python3.12" / "site-packages" / ".nanvix-installed"
+        )
         if site_sentinel.is_file():
             h.update(site_sentinel.read_bytes())
 
@@ -186,7 +192,11 @@ class NanvixPythonBuild(ZScript):
         current_hash = self._ramfs_input_hash(sysroot)
 
         # Skip rebuild if ramfs image and sentinel are up-to-date
-        if img.is_file() and sentinel.is_file() and sentinel.read_text().strip() == current_hash:
+        if (
+            img.is_file()
+            and sentinel.is_file()
+            and sentinel.read_text().strip() == current_hash
+        ):
             log.info("ramfs image already up-to-date, skipping rebuild")
             self._ramfs_img = img
             return img
@@ -231,8 +241,15 @@ class NanvixPythonBuild(ZScript):
         pylib = lib_dir / "python3.12"
 
         # Remove development artifacts
-        for name in ("config-3.12", "idlelib", "turtledemo", "ensurepip",
-                      "lib2to3", "tkinter", "pydoc_data"):
+        for name in (
+            "config-3.12",
+            "idlelib",
+            "turtledemo",
+            "ensurepip",
+            "lib2to3",
+            "tkinter",
+            "pydoc_data",
+        ):
             p = pylib / name
             if p.is_dir():
                 shutil.rmtree(p)
@@ -248,8 +265,13 @@ class NanvixPythonBuild(ZScript):
         # Remove heavy site-packages
         site_pkg = pylib / "site-packages"
         heavy_pkgs = [
-            "plotly", "jupyterlab_plotly", "sympy", "nltk",
-            "share", "textblob", "joblib",
+            "plotly",
+            "jupyterlab_plotly",
+            "sympy",
+            "nltk",
+            "share",
+            "textblob",
+            "joblib",
         ]
         for pkg in heavy_pkgs:
             p = site_pkg / pkg
@@ -262,7 +284,10 @@ class NanvixPythonBuild(ZScript):
 
         # Remove build/packaging tools (not needed at runtime)
         build_pkgs = [
-            "setuptools", "wheel", "pkg_resources", "_plotly_utils",
+            "setuptools",
+            "wheel",
+            "pkg_resources",
+            "_plotly_utils",
         ]
         for pkg in build_pkgs:
             p = site_pkg / pkg
@@ -352,18 +377,26 @@ class NanvixPythonBuild(ZScript):
 
         # Create input tar from pylib
         import io
+
         in_buf = io.BytesIO()
         with tarfile.open(fileobj=in_buf, mode="w") as tf:
             tf.add(str(pylib), arcname=".")
         in_bytes = in_buf.getvalue()
 
         cmd = [
-            "docker", "run", "--rm", "-i",
+            "docker",
+            "run",
+            "--rm",
+            "-i",
             _DOCKER_IMAGE,
-            "sh", "-c", script,
+            "sh",
+            "-c",
+            script,
         ]
         result = subprocess.run(
-            cmd, input=in_bytes, capture_output=True,
+            cmd,
+            input=in_bytes,
+            capture_output=True,
         )
         if result.returncode != 0:
             log.warning(f"Docker compileall failed: {result.stderr.decode().strip()}")
@@ -426,8 +459,16 @@ class NanvixPythonBuild(ZScript):
 
         for req_path in req_paths:
             subprocess.run(
-                [*pip_cmd, "install", f"--target={site_pkg}", "--no-deps",
-                 "--no-compile", "--quiet", "-r", str(req_path)],
+                [
+                    *pip_cmd,
+                    "install",
+                    f"--target={site_pkg}",
+                    "--no-deps",
+                    "--no-compile",
+                    "--quiet",
+                    "-r",
+                    str(req_path),
+                ],
                 capture_output=True,
             )
 
@@ -444,7 +485,7 @@ class NanvixPythonBuild(ZScript):
     # Lifecycle hooks
     # ------------------------------------------------------------------
 
-    def setup(self) -> None:
+    def setup(self) -> bool:
         """Download sysroot and pre-built CPython buildroot.
 
         The base ``super().setup()`` downloads the Nanvix sysroot and
@@ -452,7 +493,7 @@ class NanvixPythonBuild(ZScript):
         download the pre-built CPython release artifact and extract the
         interpreter binary and standard library into the sysroot.
         """
-        super().setup()
+        result = super().setup()
 
         sysroot = self._sysroot_path()
 
@@ -460,6 +501,7 @@ class NanvixPythonBuild(ZScript):
         self._install_cpython(sysroot)
 
         log.success("setup complete")
+        return result
 
     def _install_cpython(self, sysroot: Path) -> None:
         """Download and extract the pre-built CPython artifact into sysroot."""
@@ -618,7 +660,9 @@ class NanvixPythonBuild(ZScript):
             exclude_tests = "83 89 90"
 
         # Determine which tests to run
-        targets = set(self.targets) if self.targets else {"test-smoke", "test-integration"}
+        targets = (
+            set(self.targets) if self.targets else {"test-smoke", "test-integration"}
+        )
 
         try:
             if "test-smoke" in targets:
@@ -660,8 +704,13 @@ class NanvixPythonBuild(ZScript):
         host_python = self._host_python()
         if host_python:
             subprocess.run(
-                [host_python, "-m", "compileall", "-q",
-                 str(sysroot / "lib" / "python3.12")],
+                [
+                    host_python,
+                    "-m",
+                    "compileall",
+                    "-q",
+                    str(sysroot / "lib" / "python3.12"),
+                ],
                 capture_output=True,
             )
             for t in sysroot.glob("test_*.py"):
@@ -716,13 +765,17 @@ class NanvixPythonBuild(ZScript):
                 skip_log = tmp / f"skip_{name}.log"
                 skip_log.write_text(output)
 
-        print(f"Results: {total_pass} passed, {total_fail} failed, {total_skip} skipped")
+        print(
+            f"Results: {total_pass} passed, {total_fail} failed, {total_skip} skipped"
+        )
 
         if total_fail > 0:
             print(f"Failed tests: {' '.join(failed_tests)}")
             log.fatal("functional tests failed", code=EXIT_TEST_FAILURE)
         if total_pass == 0:
-            log.fatal("no tests passed (all skipped or none found)", code=EXIT_TEST_FAILURE)
+            log.fatal(
+                "no tests passed (all skipped or none found)", code=EXIT_TEST_FAILURE
+            )
 
         log.success("all functional tests passed")
 
@@ -807,8 +860,7 @@ class NanvixPythonBuild(ZScript):
         host_python = self._host_python()
         if host_python:
             subprocess.run(
-                [host_python, "-m", "compileall", "-q",
-                 str(lib_dir / "python3.12")],
+                [host_python, "-m", "compileall", "-q", str(lib_dir / "python3.12")],
                 capture_output=True,
             )
 
@@ -837,7 +889,9 @@ class NanvixPythonBuild(ZScript):
 
         # README
         if mode == "standalone":
-            run_cmd = f"./bin/{nanvixd_name} -ramfs nanvix_rootfs.img -- ./bin/python3.12"
+            run_cmd = (
+                f"./bin/{nanvixd_name} -ramfs nanvix_rootfs.img -- ./bin/python3.12"
+            )
         else:
             run_cmd = f"./bin/{nanvixd_name} -- ./bin/python3.12"
         readme_text = (
@@ -854,7 +908,7 @@ class NanvixPythonBuild(ZScript):
             f"(a nanvixd limitation).\n"
             f"Use script files for multi-word Python commands:\n\n"
             f"```sh\n"
-            f'echo "print(\'Hello from Nanvix!\')" > test.py\n'
+            f"echo \"print('Hello from Nanvix!')\" > test.py\n"
             f"{run_cmd} test.py\n"
             f"```\n"
         )
@@ -863,8 +917,11 @@ class NanvixPythonBuild(ZScript):
         # Validate bundle
         log.info("release: validating bundle")
         required = [
-            f"bin/{nanvixd_name}", "bin/kernel.elf", "bin/python3.12",
-            "lib/python3.12/os.py", "lib/python3.12/site.py",
+            f"bin/{nanvixd_name}",
+            "bin/kernel.elf",
+            "bin/python3.12",
+            "lib/python3.12/os.py",
+            "lib/python3.12/site.py",
         ]
         if mode == "standalone":
             required.append("nanvix_rootfs.img")
@@ -984,7 +1041,9 @@ class NanvixPythonBuild(ZScript):
 
         if "hello" not in output:
             print(output)
-            log.fatal("benchmark failed: expected output not found", code=EXIT_BUILD_FAILURE)
+            log.fatal(
+                "benchmark failed: expected output not found", code=EXIT_BUILD_FAILURE
+            )
 
         print(f"Execution time: {elapsed:.3f}s")
         log.success("benchmark complete")
