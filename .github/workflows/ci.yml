@@ -7,11 +7,11 @@ on:
   schedule:
     - cron: "0 0 * * *"
   repository_dispatch:
-    types: [ cpython-release ]
+    types: [cpython-release]
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main", "nanvix/**" ]
+    branches: ["main", "nanvix/**"]
   workflow_dispatch:
 
 permissions:
@@ -34,6 +34,8 @@ jobs:
       memory-sizes: "[\"256mb\"]"
       caller-event-name: ${{ github.event_name }}
       windows-test: false
+      python-paths: ".nanvix/z.py tests/smoke_test_l2.py"
+      yaml-paths: ".github/workflows/ci.yml"
       release-notes-extra: |
         CPython 3.12.3 distribution for Nanvix with pure Python pip packages.
     secrets:
@@ -135,12 +137,14 @@ jobs:
           find release-artifacts \( -name "*.tar.bz2" -o -name "*.zip" \) \
             -exec cp {} release-assets/ \; 2>/dev/null || true
 
-          printf -v NOTES 'Automated build from branch %s.\n\n**Build:** [#%s](%s)\n**Commit:** [`%s`](%s)\n\nCPython 3.12.3 distribution for Nanvix with pure Python pip packages.' \
-            "${{ github.ref_name }}" \
+          NOTES=$(printf 'Automated build from branch %s.\n\n' "${{ github.ref_name }}")
+          NOTES+=$(printf '**Build:** [#%s](%s)\n' \
             "${{ github.run_number }}" \
-            "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}")
+          NOTES+=$(printf '**Commit:** [`%s`](%s)\n\n' \
             "${GITHUB_SHA::7}" \
-            "${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}"
+            "${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}")
+          NOTES+="CPython 3.12.3 distribution for Nanvix with pure Python pip packages."
 
           # Collect assets safely (nullglob prevents literal glob on empty dir)
           shopt -s nullglob
@@ -175,7 +179,7 @@ jobs:
           fi
 
   windows-release:
-    needs: [ ci, release ]
+    needs: [ci, release]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     env:
