@@ -34,6 +34,7 @@ jobs:
       memory-sizes: "[\"256mb\"]"
       caller-event-name: ${{ github.event_name }}
       windows-test: false
+      python-paths: ".nanvix/z.py tests/smoke_test_l2.py"
       release-notes-extra: |
         CPython 3.12.3 distribution for Nanvix with pure Python pip packages.
     secrets:
