@@ -485,7 +485,7 @@ class NanvixPythonBuild(ZScript):
     # Lifecycle hooks
     # ------------------------------------------------------------------
 
-    def setup(self) -> None:
+    def setup(self) -> bool:
         """Download sysroot and pre-built CPython buildroot.
 
         The base ``super().setup()`` downloads the Nanvix sysroot and
@@ -493,7 +493,7 @@ class NanvixPythonBuild(ZScript):
         download the pre-built CPython release artifact and extract the
         interpreter binary and standard library into the sysroot.
         """
-        super().setup()
+        result = super().setup()
 
         sysroot = self._sysroot_path()
 
@@ -501,6 +501,7 @@ class NanvixPythonBuild(ZScript):
         self._install_cpython(sysroot)
 
         log.success("setup complete")
+        return result
 
     def _install_cpython(self, sysroot: Path) -> None:
         """Download and extract the pre-built CPython artifact into sysroot."""
