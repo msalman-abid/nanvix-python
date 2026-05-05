@@ -497,6 +497,28 @@ class NanvixPythonBuild(ZScript):
         shutil.copytree(pil_src, pil_dst)
         log.info(f"installed PIL shim into {pil_dst}")
 
+    def _patch_openpyxl_lxml(self, site_pkg: Path) -> None:
+        """Disable lxml usage in openpyxl.
+
+        The Nanvix lxml binary does not provide the full API (e.g.
+        lxml.etree.xmlfile is missing).  Force openpyxl to use the
+        pure-Python et_xmlfile fallback instead.
+        """
+        xml_init = site_pkg / "openpyxl" / "xml" / "__init__.py"
+        if not xml_init.is_file():
+            return
+        content = xml_init.read_text()
+        if "LXML = False" in content:
+            return
+        # Replace the dynamic lxml detection with a forced False
+        patched = content.replace(
+            "LXML = lxml_available() and lxml_env_set()",
+            "LXML = False  # Nanvix: lxml lacks xmlfile; use et_xmlfile fallback",
+        )
+        if patched != content:
+            xml_init.write_text(patched)
+            log.info("patched openpyxl to disable lxml (missing xmlfile)")
+
     # ------------------------------------------------------------------
     # Lifecycle hooks
     # ------------------------------------------------------------------
@@ -602,6 +624,9 @@ class NanvixPythonBuild(ZScript):
         # Install PIL shim (pure-Python Pillow replacement for python-pptx)
         self._install_pil_shim(site_pkg)
 
+        # Patch openpyxl to use et_xmlfile instead of lxml.etree.xmlfile
+        self._patch_openpyxl_lxml(site_pkg)
+
         # Build ramfs image for standalone deployment
         if self.config.deployment_mode == "standalone":
             self._ensure_ramfs(sysroot)
@@ -645,6 +670,8 @@ class NanvixPythonBuild(ZScript):
         site_pkg = sysroot / "lib" / "python3.12" / "site-packages"
         site_pkg.mkdir(parents=True, exist_ok=True)
         self._install_site_packages(site_pkg)
+        self._install_pil_shim(site_pkg)
+        self._patch_openpyxl_lxml(site_pkg)
 
         # Copy test scripts into sysroot
         tests_dir = self.repo_root / "tests"
