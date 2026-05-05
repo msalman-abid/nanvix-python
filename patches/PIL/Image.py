@@ -61,9 +61,9 @@ class Image:
 
 
 def _read_all_bytes(fp) -> bytes:
-    data = fp.read(MAX_IMAGE_HEADER_BYTES)
-    if len(data) >= MAX_IMAGE_HEADER_BYTES:
-        raise ValueError("Image header exceeds maximum allowed size")
+    data = fp.read(MAX_IMAGE_HEADER_BYTES + 1)
+    if len(data) > MAX_IMAGE_HEADER_BYTES:
+        data = data[:MAX_IMAGE_HEADER_BYTES]
     return data
 
 
@@ -141,6 +141,8 @@ def _parse_bmp(data: bytes) -> Image:
 
 
 def _parse_tiff(data: bytes) -> Image:
+    if len(data) < 8:
+        raise ValueError("TIFF header too short")
     bo = "<" if data[:2] == b"II" else ">"
     ifd_offset = struct.unpack(f"{bo}I", data[4:8])[0]
     if ifd_offset + 2 > len(data):

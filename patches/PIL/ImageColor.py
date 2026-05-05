@@ -15,8 +15,8 @@ def getrgb(color: str) -> tuple[int, ...]:
     low = color.strip().lower()
     if low in _NAMED_COLORS:
         return _NAMED_COLORS[low]
-    if color.startswith("#"):
-        h = color[1:]
+    if low.startswith("#"):
+        h = low[1:]
         if len(h) == 3:
             return tuple(int(c * 2, 16) for c in h)
         if len(h) == 6:

@@ -21,7 +21,9 @@ class FreeTypeFont:
         w = self.getlength(text)
         return (0, 0, int(w), int(self.size * 1.2))
 
-    getsize = getbbox
+    def getsize(self, text, *args, **kwargs):
+        w = self.getlength(text)
+        return (int(w), int(self.size * 1.2))
 
 
 def truetype(font=None, size=10, index=0, encoding="", layout_engine=None):

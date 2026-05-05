@@ -173,6 +173,12 @@ class NanvixPythonBuild(ZScript):
         if site_sentinel.is_file():
             h.update(site_sentinel.read_bytes())
 
+        # Factor in PIL shim sources
+        pil_shim = self.repo_root / "patches" / "PIL"
+        if pil_shim.is_dir():
+            for src in sorted(pil_shim.rglob("*.py")):
+                h.update(src.read_bytes())
+
         # Factor in test scripts
         for src in sorted(sysroot.glob("smoke_test_l2.py")):
             h.update(src.read_bytes())
