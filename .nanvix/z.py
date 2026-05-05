@@ -218,6 +218,9 @@ class NanvixPythonBuild(ZScript):
         for src in sysroot.glob("test_*.py"):
             shutil.copy2(src, stripped_root)
 
+        # Generate build manifests for post-build inspection
+        self._write_build_manifests(sysroot, stripped, work_dir)
+
         log.info("building ramfs image for standalone mode")
         mkramfs = str((sysroot / "bin" / _mkramfs_binary()).resolve())
         subprocess.run(
@@ -227,6 +230,48 @@ class NanvixPythonBuild(ZScript):
         sentinel.write_text(current_hash)
         self._ramfs_img = img
         return img
+
+    def _write_build_manifests(
+        self, sysroot: Path, stripped: Path, work_dir: Path
+    ) -> None:
+        """Write manifest files recording Python lib contents before/after stripping.
+
+        Produces three files under .nanvix/manifests/ covering the
+        lib/python3.12/ subtree (stdlib + site-packages):
+          - sysroot-full.txt:    all files before stripping
+          - sysroot-ramfs.txt:   all files that end up in the ramfs image
+          - sysroot-trimmed.txt: files present in full but absent from ramfs
+
+        All three use paths relative to the sysroot root (e.g.
+        lib/python3.12/site-packages/foo.pyc) so they can be directly
+        diffed and grepped as a consistent set.
+        """
+        manifests_dir = work_dir / "manifests"
+        manifests_dir.mkdir(exist_ok=True)
+
+        src_pylib = sysroot / "lib" / "python3.12"
+        dst_root = stripped / "sysroot"
+
+        # Collect file lists relative to the sysroot root (not pylib)
+        # so all manifests share the same lib/python3.12/ prefix.
+        full_files = sorted(
+            str(f.relative_to(sysroot)) for f in src_pylib.rglob("*") if f.is_file()
+        )
+        ramfs_files = sorted(
+            str(f.relative_to(dst_root)) for f in dst_root.rglob("*") if f.is_file()
+        )
+
+        # Compute trimmed as direct set difference (same path basis).
+        trimmed = sorted(set(full_files) - set(ramfs_files))
+
+        (manifests_dir / "sysroot-full.txt").write_text("\n".join(full_files) + "\n")
+        (manifests_dir / "sysroot-ramfs.txt").write_text("\n".join(ramfs_files) + "\n")
+        (manifests_dir / "sysroot-trimmed.txt").write_text("\n".join(trimmed) + "\n")
+
+        log.info(
+            f"build manifests: {len(full_files)} original, "
+            f"{len(ramfs_files)} in ramfs, {len(trimmed)} trimmed"
+        )
 
     def _create_stripped_sysroot(self, src: Path, dst: Path) -> None:
         """Create a stripped copy of the sysroot for standalone mode."""
