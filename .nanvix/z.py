@@ -173,6 +173,12 @@ class NanvixPythonBuild(ZScript):
         if site_sentinel.is_file():
             h.update(site_sentinel.read_bytes())
 
+        # Factor in PIL shim sources
+        pil_shim = self.repo_root / "patches" / "PIL"
+        if pil_shim.is_dir():
+            for src in sorted(pil_shim.rglob("*.py")):
+                h.update(src.read_bytes())
+
         # Factor in test scripts
         for src in sorted(sysroot.glob("smoke_test_l2.py")):
             h.update(src.read_bytes())
@@ -481,6 +487,44 @@ class NanvixPythonBuild(ZScript):
 
         sentinel.write_text(req_hash)
 
+    def _install_pil_shim(self, site_pkg: Path) -> None:
+        """Copy the pure-Python PIL shim into site-packages.
+
+        Replaces Pillow's C extension with lightweight header-only
+        parsing that python-pptx needs for image handling.
+        """
+        pil_src = self.repo_root / "patches" / "PIL"
+        pil_dst = site_pkg / "PIL"
+        if not pil_src.is_dir():
+            log.warning("patches/PIL not found; skipping PIL shim installation")
+            return
+        if pil_dst.exists():
+            shutil.rmtree(pil_dst)
+        shutil.copytree(pil_src, pil_dst)
+        log.info(f"installed PIL shim into {pil_dst}")
+
+    def _patch_openpyxl_lxml(self, site_pkg: Path) -> None:
+        """Disable lxml usage in openpyxl.
+
+        The Nanvix lxml binary does not provide the full API (e.g.
+        lxml.etree.xmlfile is missing).  Force openpyxl to use the
+        pure-Python et_xmlfile fallback instead.
+        """
+        xml_init = site_pkg / "openpyxl" / "xml" / "__init__.py"
+        if not xml_init.is_file():
+            return
+        content = xml_init.read_text()
+        if "LXML = False" in content:
+            return
+        # Replace the dynamic lxml detection with a forced False
+        patched = content.replace(
+            "LXML = lxml_available() and lxml_env_set()",
+            "LXML = False  # Nanvix: lxml lacks xmlfile; use et_xmlfile fallback",
+        )
+        if patched != content:
+            xml_init.write_text(patched)
+            log.info("patched openpyxl to disable lxml (missing xmlfile)")
+
     # ------------------------------------------------------------------
     # Lifecycle hooks
     # ------------------------------------------------------------------
@@ -583,6 +627,12 @@ class NanvixPythonBuild(ZScript):
         site_pkg.mkdir(parents=True, exist_ok=True)
         self._install_site_packages(site_pkg)
 
+        # Install PIL shim (pure-Python Pillow replacement for python-pptx)
+        self._install_pil_shim(site_pkg)
+
+        # Patch openpyxl to use et_xmlfile instead of lxml.etree.xmlfile
+        self._patch_openpyxl_lxml(site_pkg)
+
         # Build ramfs image for standalone deployment
         if self.config.deployment_mode == "standalone":
             self._ensure_ramfs(sysroot)
@@ -626,6 +676,8 @@ class NanvixPythonBuild(ZScript):
         site_pkg = sysroot / "lib" / "python3.12" / "site-packages"
         site_pkg.mkdir(parents=True, exist_ok=True)
         self._install_site_packages(site_pkg)
+        self._install_pil_shim(site_pkg)
+        self._patch_openpyxl_lxml(site_pkg)
 
         # Copy test scripts into sysroot
         tests_dir = self.repo_root / "tests"
