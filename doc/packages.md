@@ -25,6 +25,7 @@ Source: [`requirements/site-packages-base.txt`](../requirements/site-packages-ba
 | immutabledict      | —       |
 | ordered-set        | 4.1.0   |
 | packaging          | 23.2    |
+| schedule           | 1.2.2   |
 | setuptools         | 75.8.0  |
 | tenacity           | —       |
 | toolz              | 0.12.1  |
