@@ -32,6 +32,7 @@ Source: [`requirements/site-packages-base.txt`](../requirements/site-packages-ba
 | tqdm               | —       |
 | wheel              | 0.45.1  |
 | annotated-types    | 0.7.0   |
+| iniconfig          | 2.3.0   |
 | ply                | 3.11    |
 | pyparsing          | 3.1.1   |
 | typing-extensions  | 4.15.0  |
@@ -46,6 +47,7 @@ Source: [`requirements/site-packages-base.txt`](../requirements/site-packages-ba
 | MarkupSafe         | 2.1.5   |
 | mdurl              | 0.1.2   |
 | pygments           | —       |
+| srt                | 3.5.3   |
 | striprtf           | 0.0.20  |
 | tabulate           | 0.8.10  |
 | absl-py            | 2.3.1   |
@@ -71,6 +73,8 @@ Source: [`requirements/site-packages-base.txt`](../requirements/site-packages-ba
 | spacy-legacy       | 3.0.12  |
 | spacy-loggers      | 1.0.5   |
 | wasabi             | 1.1.3   |
+| hypothesis         | 6.152.4 |
+| sortedcontainers   | 2.4.0   |
 | cycler             | 0.12.1  |
 | entrypoints        | 0.4     |
 | fpdf               | 1.7.2   |
@@ -119,6 +123,7 @@ Source: [`requirements/site-packages-extra.txt`](../requirements/site-packages-e
 | plotly           | 5.20.0  |
 | xlrd             | 2.0.1   |
 | xlsxwriter       | —       |
+| python-pptx      | 1.0.2   |
 | blinker          | —       |
 | catalogue        | 2.0.10  |
 | colorama         | —       |
