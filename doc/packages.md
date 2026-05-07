@@ -45,6 +45,7 @@ Source: [`requirements/site-packages-base.txt`](../requirements/site-packages-ba
 | idna               | 3.11    |
 | markdown           | —       |
 | markdown-it-py     | 4.0.0   |
+| markdownify        | —       |
 | MarkupSafe         | 2.1.5   |
 | mdurl              | 0.1.2   |
 | pygments           | —       |
