@@ -229,9 +229,10 @@ jobs:
           mkdir -p nanvix-win-extract
           unzip -q "$WINZIP" -d nanvix-win-extract
 
-          # Replace Linux host binary with Windows host binary
+          # Replace Linux host binaries with Windows host binaries
           rm -f "$DIST_DIR/bin/nanvixd.elf"
           cp nanvix-win-extract/nanvixd.exe "$DIST_DIR/bin/nanvixd.exe"
+          cp nanvix-win-extract/kernel.elf "$DIST_DIR/bin/kernel.elf"
 
           # Create the Windows zip
           ZIP_NAME="${DIR_NAME}.zip"
