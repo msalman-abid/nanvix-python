@@ -114,6 +114,7 @@ Source: [`requirements/site-packages-extra.txt`](../requirements/site-packages-e
 | pylatex          | 1.4.2   |
 | PyPDF2           | 3.0.1   |
 | pypdf            | —       |
+| svgwrite         | 1.4.3   |
 | google-pasta     | 0.2.0   |
 | nltk             | —       |
 | python-dateutil  | 2.8.2   |
