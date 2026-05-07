@@ -108,6 +108,7 @@ Source: [`requirements/site-packages-extra.txt`](../requirements/site-packages-e
 | msgpack          | —       |
 | pyyaml           | —       |
 | docutils         | —       |
+| docx2txt         | 0.9     |
 | fonttools        | 4.49.0  |
 | Jinja2           | —       |
 | pandoc           | 2.4     |
