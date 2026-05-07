@@ -25,6 +25,7 @@ Source: [`requirements/site-packages-base.txt`](../requirements/site-packages-ba
 | immutabledict      | —       |
 | ordered-set        | 4.1.0   |
 | packaging          | 23.2    |
+| pluggy             | 1.6.0   |
 | schedule           | 1.2.2   |
 | setuptools         | 75.8.0  |
 | tenacity           | —       |
@@ -74,6 +75,7 @@ Source: [`requirements/site-packages-base.txt`](../requirements/site-packages-ba
 | spacy-loggers      | 1.0.5   |
 | wasabi             | 1.1.3   |
 | hypothesis         | 6.152.4 |
+| pytest             | 9.0.3   |
 | sortedcontainers   | 2.4.0   |
 | cycler             | 0.12.1  |
 | entrypoints        | 0.4     |
