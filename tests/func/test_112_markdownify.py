@@ -8,8 +8,8 @@ try:
         "<p>See <a href=\"https://example.com\">example</a>.</p>"
         "<ul><li>one</li><li>two</li></ul>"
     )
-    # markdownify uses BeautifulSoup under the hood; the html.parser
-    # backend is the only one available on Nanvix (no lxml/html5lib).
+    # markdownify uses BeautifulSoup under the hood.
+    # This test validates the Markdown conversion result.
     out = md(html, heading_style="ATX")
     assert "# Title" in out, out
     assert "[example](https://example.com)" in out, out
