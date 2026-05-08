@@ -28,6 +28,7 @@ Source: [`requirements/site-packages-base.txt`](../requirements/site-packages-ba
 | pluggy             | 1.6.0   |
 | schedule           | 1.2.2   |
 | setuptools         | 75.8.0  |
+| sniffio            | 1.3.1   |
 | tenacity           | —       |
 | toolz              | 0.12.1  |
 | tqdm               | —       |
