@@ -45,6 +45,7 @@ Source: [`requirements/site-packages-base.txt`](../requirements/site-packages-ba
 | cloudpathlib       | 0.23.0  |
 | fsspec             | —       |
 | h11                | 0.16.0  |
+| httpcore           | 1.0.9   |
 | idna               | 3.11    |
 | markdown           | —       |
 | markdown-it-py     | 4.0.0   |
