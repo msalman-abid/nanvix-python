@@ -44,6 +44,7 @@ Source: [`requirements/site-packages-base.txt`](../requirements/site-packages-ba
 | charset-normalizer | 3.4.4   |
 | cloudpathlib       | 0.23.0  |
 | fsspec             | —       |
+| h11                | 0.16.0  |
 | idna               | 3.11    |
 | markdown           | —       |
 | markdown-it-py     | 4.0.0   |
