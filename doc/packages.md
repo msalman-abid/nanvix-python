@@ -39,6 +39,7 @@ Source: [`requirements/site-packages-base.txt`](../requirements/site-packages-ba
 | pyparsing          | 3.1.1   |
 | typing-extensions  | 4.15.0  |
 | typing-inspection  | 0.4.2   |
+| anyio              | 4.13.0  |
 | certifi            | —       |
 | charset-normalizer | 3.4.4   |
 | cloudpathlib       | 0.23.0  |
