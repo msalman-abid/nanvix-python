@@ -28,7 +28,7 @@ jobs:
   ci:
     uses: nanvix/workflows/.github/workflows/nanvix-ci.yml@v2.0.0
     with:
-      zutil-version: "v0.8.1"
+      zutil-version: "v0.8.2"
       platforms: "[\"microvm\"]"
       process-modes: "[\"standalone\"]"
       memory-sizes: "[\"256mb\"]"
@@ -63,7 +63,7 @@ jobs:
       - name: Install nanvix-zutil
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
-          NANVIX_ZUTIL_VERSION: "v0.8.1"
+          NANVIX_ZUTIL_VERSION: "v0.8.2"
         shell: pwsh
         run: |
           $jq = '.assets[] | select(.name | endswith(".whl")) | .browser_download_url'
@@ -88,9 +88,10 @@ jobs:
       - name: Extract ramfs from Linux tarball
         shell: pwsh
         run: |
-          $tarball = Get-ChildItem linux-build -Filter "*.tar.bz2" | Select-Object -First 1
+          $tarball = Get-ChildItem linux-build -Filter "*.tar.gz" | Select-Object -First 1
+          if (-not $tarball) { Write-Error "No .tar.gz tarball found in linux-build"; exit 1 }
           Write-Host "Extracting ramfs from $($tarball.Name)"
-          tar -xjf $tarball.FullName -C linux-build
+          tar -xzf $tarball.FullName -C linux-build
           $ramfs = Get-ChildItem linux-build -Recurse -Filter "nanvix_rootfs.img" | Select-Object -First 1
           if (-not $ramfs) { Write-Error "nanvix_rootfs.img not found in tarball"; exit 1 }
           $dest = Join-Path $env:GITHUB_WORKSPACE ".nanvix" "nanvix_rootfs.img"
@@ -137,7 +138,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release-assets
-          find release-artifacts \( -name "*.tar.bz2" -o -name "*.zip" \) \
+          find release-artifacts \( -name "*.tar.gz" -o -name "*.zip" \) \
             -exec cp {} release-assets/ \; 2>/dev/null || true
 
           NOTES=$(printf 'Automated build from branch %s.\n\n' "${{ github.ref_name }}")
@@ -196,7 +197,7 @@ jobs:
           set -euo pipefail
           gh release download "$RELEASE_TAG" \
             --repo "${{ github.repository }}" \
-            --pattern "*standalone*.tar.bz2" \
+            --pattern "*standalone*.tar.gz" \
             --dir release-download
           ls -la release-download/
 
@@ -216,10 +217,14 @@ jobs:
           set -euo pipefail
 
           # Extract the standalone tarball
-          TARBALL=$(find release-download -name "*standalone*.tar.bz2" | head -1)
+          TARBALL=$(find release-download -name "*standalone*.tar.gz" | head -1)
+          if [ -z "$TARBALL" ] || [ ! -f "$TARBALL" ]; then
+            echo "::error::No standalone .tar.gz tarball found in release-download"
+            exit 1
+          fi
           echo "Using tarball: $TARBALL"
           mkdir -p extract
-          tar -xjf "$TARBALL" -C extract
+          tar -xzf "$TARBALL" -C extract
 
           # Find the extracted directory name
           DIST_DIR=$(find extract -mindepth 1 -maxdepth 1 -type d | head -1)

@@ -15,8 +15,8 @@ run Python under `nanvixd`:
 ### Linux
 
 ```bash
-gh release download --repo nanvix/nanvix-python --pattern "*.tar.bz2" --clobber
-tar -xjf microvm-standalone-256mb.tar.bz2
+gh release download --repo nanvix/nanvix-python --pattern "*.tar.gz" --clobber
+tar -xzf microvm-standalone-256mb.tar.gz
 cd microvm-standalone-256mb
 ./bin/nanvixd.elf -- ./bin/python3.12 -c "print('Hello from Nanvix!')"
 ```
