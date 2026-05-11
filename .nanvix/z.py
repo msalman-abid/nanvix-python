@@ -607,7 +607,7 @@ class NanvixPythonBuild(ZScript):
         else:
             version_specifier = cpython_version
 
-        asset_name = f"cpython-{machine}-{mode}-{memory}.tar.bz2"
+        asset_name = f"cpython-{machine}-{mode}-{memory}.tar.gz"
         cache_dir = self.nanvix_dir / "cache"
 
         # Check if already installed
@@ -636,7 +636,7 @@ class NanvixPythonBuild(ZScript):
 
         # Extract CPython into sysroot
         log.info("extracting CPython into sysroot")
-        with tarfile.open(asset_path, "r:bz2") as tf:
+        with tarfile.open(asset_path, "r:*") as tf:
             for member in tf.getmembers():
                 if not member.isfile():
                     continue
@@ -1033,7 +1033,7 @@ class NanvixPythonBuild(ZScript):
             )
         log.success("release: validation passed")
 
-        # Create archive (.zip on Windows, .tar.bz2 on Linux)
+        # Create archive (.zip on Windows, .tar.gz on non-Windows hosts)
         if _IS_WINDOWS:
             log.info("release: creating zip archive")
             archive = dist_dir / f"{asset_prefix}.zip"
@@ -1044,9 +1044,9 @@ class NanvixPythonBuild(ZScript):
                         zf.write(file, arcname)
         else:
             log.info("release: creating tarball")
-            archive = dist_dir / f"{asset_prefix}.tar.bz2"
+            archive = dist_dir / f"{asset_prefix}.tar.gz"
             subprocess.run(
-                ["tar", "-cjf", str(archive), "-C", str(bundle_root), asset_prefix],
+                ["tar", "-czf", str(archive), "-C", str(bundle_root), asset_prefix],
                 check=True,
             )
         shutil.rmtree(bundle_root)
