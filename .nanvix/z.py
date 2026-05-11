@@ -407,7 +407,7 @@ class NanvixPythonBuild(ZScript):
         the directory is tarred into the container and extracted back.
         Falls back to skipping if Docker is not available.
         """
-        _DOCKER_IMAGE = "nanvix/toolchain:latest-minimal"
+        _DOCKER_IMAGE = "ghcr.io/nanvix/toolchain-python:latest"
 
         if not docker_available():
             log.warning("Docker not available; skipping .pyc pre-compilation")
