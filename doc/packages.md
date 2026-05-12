@@ -46,10 +46,7 @@ Source: [`requirements/site-packages-base.txt`](../requirements/site-packages-ba
 | fsspec             | —       |
 | h11                | 0.16.0  |
 | httpcore           | 1.0.9   |
-<<<<<<< feat/port-httpx
 | httpx              | 0.28.1  |
-=======
->>>>>>> main
 | idna               | 3.11    |
 | markdown           | —       |
 | markdown-it-py     | 4.0.0   |
