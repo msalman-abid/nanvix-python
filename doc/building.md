@@ -8,7 +8,7 @@ CPython 3.12 with pure Python pip packages.
 | Requirement            | Notes                                                           |
 | ---------------------- | --------------------------------------------------------------- |
 | **Linux x86-64 host**  | Build scripts assume a Linux environment (or Docker on Windows) |
-| **Nanvix toolchain**   | `nanvix/toolchain:latest-minimal` Docker image or `/opt/nanvix` |
+| **Nanvix toolchain**   | `ghcr.io/nanvix/toolchain-python:latest` Docker image or `/opt/nanvix` |
 | **Python 3.12+**       | Host Python for nanvix-zutil and build orchestration            |
 | **nanvix-zutil**       | Auto-bootstrapped by `./z` wrapper scripts                     |
 | **Docker** (optional)  | Used automatically when a native toolchain is not available     |
