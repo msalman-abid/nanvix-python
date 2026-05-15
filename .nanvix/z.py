@@ -290,6 +290,9 @@ class NanvixPythonBuild(ZScript):
             shutil.copytree(src_pylib, lib_dir / "python3.12")
 
         pylib = lib_dir / "python3.12"
+        platlib = pylib / "lib-dynload"
+        platlib.mkdir(parents=True, exist_ok=True)
+        (platlib / ".nanvix-keep").touch(exist_ok=True)
 
         # Remove development artifacts
         for name in (
@@ -782,6 +785,9 @@ class NanvixPythonBuild(ZScript):
         if "FAIL" in output:
             print(output)
             log.fatal("smoke test failed", code=EXIT_TEST_FAILURE)
+        if "Could not find platform dependent libraries" in output:
+            print(output)
+            log.fatal("smoke test reported missing platform libraries")
         if "PASS" in output:
             log.success("smoke test: PASS")
         elif output.strip():
