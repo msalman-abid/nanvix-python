@@ -48,7 +48,9 @@ _DEFAULT_TIMEOUT = 300
 
 # CPython startup warning emitted when lib-dynload cannot be resolved.
 # Keep this in sync with CPython's warning text in Modules/getpath.py.
-_PLATLIB_WARNING_RE = re.compile(r"could not find platform dependent libraries", re.I)
+_PLATLIB_WARNING_RE = re.compile(
+    r"\bcould not find platform dependent libraries\b", re.I
+)
 
 # Platform detection
 _IS_WINDOWS = sys.platform == "win32"
