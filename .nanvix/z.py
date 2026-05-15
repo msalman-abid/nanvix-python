@@ -1056,9 +1056,7 @@ class NanvixPythonBuild(ZScript):
             with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zf:
                 for entry in sorted(bundle_dir.rglob("*")):
                     arcname = f"{asset_prefix}/{entry.relative_to(bundle_dir)}"
-                    if entry.is_symlink():
-                        zf.write(entry, arcname)
-                    elif entry.is_dir():
+                    if entry.is_dir():
                         zf.writestr(f"{arcname}/", b"")
                     elif entry.is_file():
                         zf.write(entry, arcname)
