@@ -787,7 +787,10 @@ class NanvixPythonBuild(ZScript):
             log.fatal("smoke test failed", code=EXIT_TEST_FAILURE)
         if "Could not find platform dependent libraries" in output:
             print(output)
-            log.fatal("smoke test reported missing platform libraries")
+            log.fatal(
+                "smoke test reported missing platform libraries",
+                code=EXIT_TEST_FAILURE,
+            )
         if "PASS" in output:
             log.success("smoke test: PASS")
         elif output.strip():
