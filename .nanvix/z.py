@@ -298,10 +298,8 @@ class NanvixPythonBuild(ZScript):
         pylib = lib_dir / "python3.12"
         # Ensure platform-dependent library landmark exists for CPython
         # startup path resolution, even when no extension modules are shipped.
-        # Keep a placeholder file so packaging tools don't drop empty dirs.
         platlib = pylib / "lib-dynload"
         platlib.mkdir(parents=True, exist_ok=True)
-        (platlib / ".nanvix-keep").touch(exist_ok=True)
 
         # Remove development artifacts
         for name in (
@@ -1056,10 +1054,12 @@ class NanvixPythonBuild(ZScript):
             log.info("release: creating zip archive")
             archive = dist_dir / f"{asset_prefix}.zip"
             with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zf:
-                for file in bundle_dir.rglob("*"):
-                    if file.is_file():
-                        arcname = f"{asset_prefix}/{file.relative_to(bundle_dir)}"
-                        zf.write(file, arcname)
+                for entry in sorted(bundle_dir.rglob("*")):
+                    arcname = f"{asset_prefix}/{entry.relative_to(bundle_dir)}"
+                    if entry.is_dir():
+                        zf.writestr(f"{arcname}/", b"")
+                    elif entry.is_file():
+                        zf.write(entry, arcname)
         else:
             log.info("release: creating tarball")
             archive = dist_dir / f"{asset_prefix}.tar.gz"
