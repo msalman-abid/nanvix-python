@@ -46,6 +46,9 @@ from nanvix_zutil.github import download_release_asset, resolve_release
 # Per-test timeout in seconds (overridable via TIMEOUT_SECONDS env var).
 _DEFAULT_TIMEOUT = 300
 
+# CPython startup warning emitted when platform libs are not found.
+_PLATLIB_WARNING_RE = re.compile(r"could not find platform dependent libraries", re.I)
+
 # Platform detection
 _IS_WINDOWS = sys.platform == "win32"
 
@@ -785,7 +788,7 @@ class NanvixPythonBuild(ZScript):
         if "FAIL" in output:
             print(output)
             log.fatal("smoke test failed", code=EXIT_TEST_FAILURE)
-        if re.search(r"could not find platform dependent libraries", output, re.I):
+        if _PLATLIB_WARNING_RE.search(output):
             print(output)
             log.fatal(
                 "smoke test reported missing platform libraries",
