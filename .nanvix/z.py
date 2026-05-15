@@ -46,7 +46,8 @@ from nanvix_zutil.github import download_release_asset, resolve_release
 # Per-test timeout in seconds (overridable via TIMEOUT_SECONDS env var).
 _DEFAULT_TIMEOUT = 300
 
-# CPython startup warning emitted when platform libs are not found.
+# CPython startup warning emitted when lib-dynload cannot be resolved.
+# Keep this in sync with CPython's warning text in Modules/getpath.py.
 _PLATLIB_WARNING_RE = re.compile(r"could not find platform dependent libraries", re.I)
 
 # Platform detection
@@ -293,6 +294,9 @@ class NanvixPythonBuild(ZScript):
             shutil.copytree(src_pylib, lib_dir / "python3.12")
 
         pylib = lib_dir / "python3.12"
+        # Ensure platform-dependent library landmark exists for CPython
+        # startup path resolution, even when no extension modules are shipped.
+        # Keep a placeholder file so packaging tools don't drop empty dirs.
         platlib = pylib / "lib-dynload"
         platlib.mkdir(parents=True, exist_ok=True)
         (platlib / ".nanvix-keep").touch(exist_ok=True)
