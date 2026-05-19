@@ -31,7 +31,7 @@ from pathlib import Path
 
 from nanvix_zutil import (
     CFG_SYSROOT,
-    CFG_TOOLCHAIN,
+    TOOLCHAIN_CONTAINER_PATH,
     ZScript,
     log,
 )
@@ -85,7 +85,7 @@ class NanvixPythonBuild(ZScript):
 
     def _toolchain_str(self) -> str:
         """Return the raw host toolchain root path as a string."""
-        return self.config.get(CFG_TOOLCHAIN, "/opt/nanvix") or "/opt/nanvix"
+        return str(TOOLCHAIN_CONTAINER_PATH)
 
     def _host_python(self) -> str | None:
         """Find a usable host Python interpreter."""
