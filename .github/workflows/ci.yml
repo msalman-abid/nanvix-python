@@ -29,10 +29,11 @@ jobs:
   ci:
     uses: nanvix/workflows/.github/workflows/nanvix-ci.yml@v2.0.2
     with:
-      zutil-version: "v0.8.5"
+      zutil-version: "v0.9.2"
       platforms: "[\"microvm\"]"
       process-modes: "[\"standalone\"]"
       memory-sizes: "[\"256mb\"]"
+      skip-full-test-modes: "[]"
       caller-event-name: ${{ github.event_name }}
       windows-test: false
       python-paths: ".nanvix/z.py tests/smoke_test_l2.py"
@@ -64,7 +65,7 @@ jobs:
       - name: Install nanvix-zutil
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
-          NANVIX_ZUTIL_VERSION: "v0.8.2"
+          NANVIX_ZUTIL_VERSION: "v0.9.2"
         shell: pwsh
         run: |
           $jq = '.assets[] | select(.name | endswith(".whl")) | .browser_download_url'

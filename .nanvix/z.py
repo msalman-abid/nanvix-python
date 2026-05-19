@@ -35,7 +35,6 @@ from nanvix_zutil import (
     ZScript,
     log,
 )
-from nanvix_zutil.docker import docker_available
 from nanvix_zutil.exitcodes import (
     EXIT_BUILD_FAILURE,
     EXIT_MISSING_DEP,
@@ -99,6 +98,19 @@ class NanvixPythonBuild(ZScript):
                 return name
         return None
 
+    def _ensure_python_in_repo_root(self, sysroot: Path) -> None:
+        """Copy python3.12 to repo_root for make_initrd if not already present."""
+        repo_python = self.repo_root / "python3.12"
+        if repo_python.exists():
+            return
+        python_bin = sysroot / "bin" / "python3.12"
+        shutil.copy2(python_bin, repo_python)
+
+    def _cleanup_python_in_repo_root(self) -> None:
+        """Remove the python3.12 copy from repo_root."""
+        repo_python = self.repo_root / "python3.12"
+        repo_python.unlink(missing_ok=True)
+
     def _nanvix_run(
         self,
         sysroot: Path,
@@ -112,6 +124,10 @@ class NanvixPythonBuild(ZScript):
         Uses nanvixd.exe on Windows and nanvixd.elf on Linux/macOS.
         Captures output to *log_file*.  Does NOT raise on non-zero exit
         (the caller inspects the log for PASS/FAIL).
+
+        In standalone mode, bundles python3.12 with system daemons into
+        an initrd via make_initrd; a ramfs provides the filesystem
+        (stdlib, site-packages, test scripts).
         """
         if timeout is None:
             timeout = int(os.environ.get("TIMEOUT_SECONDS", str(_DEFAULT_TIMEOUT)))
@@ -127,6 +143,13 @@ class NanvixPythonBuild(ZScript):
                     code=EXIT_MISSING_DEP,
                     hint="Run `./z build` first.",
                 )
+            # Bundle python3.12 + system daemons into an initrd.
+            self._ensure_python_in_repo_root(sysroot)
+            initrd = self.make_initrd(
+                "python3.12",
+                app_args=["-B", f"/sysroot/{script_path}"],
+                app_env=["PYTHONHOME=/sysroot", "PYTHONDONTWRITEBYTECODE=1"],
+            )
             cmd = [
                 nanvixd,
                 "-bin-dir",
@@ -134,9 +157,23 @@ class NanvixPythonBuild(ZScript):
                 "-ramfs",
                 str(self._ramfs_img),
                 "--",
-                f"./bin/python3.12",
-                f"-B /sysroot/{script_path};PYTHONHOME=/sysroot PYTHONDONTWRITEBYTECODE=1",
+                str(initrd),
             ]
+            with log_file.open("w") as fh:
+                try:
+                    subprocess.run(
+                        cmd,
+                        cwd=sysroot,
+                        stdin=subprocess.DEVNULL,
+                        stdout=fh,
+                        stderr=fh,
+                        timeout=timeout,
+                    )
+                except subprocess.TimeoutExpired:
+                    fh.write(f"\nTIMEOUT after {timeout}s\n")
+                finally:
+                    if initrd.exists():
+                        initrd.unlink()
         else:
             cmd = [
                 nanvixd,
@@ -144,19 +181,18 @@ class NanvixPythonBuild(ZScript):
                 f"./bin/python3.12",
                 f"./{script_path}",
             ]
-
-        with log_file.open("w") as fh:
-            try:
-                subprocess.run(
-                    cmd,
-                    cwd=sysroot,
-                    stdin=subprocess.DEVNULL,
-                    stdout=fh,
-                    stderr=fh,
-                    timeout=timeout,
-                )
-            except subprocess.TimeoutExpired:
-                fh.write(f"\nTIMEOUT after {timeout}s\n")
+            with log_file.open("w") as fh:
+                try:
+                    subprocess.run(
+                        cmd,
+                        cwd=sysroot,
+                        stdin=subprocess.DEVNULL,
+                        stdout=fh,
+                        stderr=fh,
+                        timeout=timeout,
+                    )
+                except subprocess.TimeoutExpired:
+                    fh.write(f"\nTIMEOUT after {timeout}s\n")
 
     # -- Standalone / ramfs helpers ----------------------------------------
 
@@ -419,7 +455,7 @@ class NanvixPythonBuild(ZScript):
         """
         _DOCKER_IMAGE = "ghcr.io/nanvix/toolchain-python:latest"
 
-        if not docker_available():
+        if shutil.which("docker") is None:
             log.warning("Docker not available; skipping .pyc pre-compilation")
             return
 
@@ -778,6 +814,7 @@ class NanvixPythonBuild(ZScript):
                 self._run_functional_tests(sysroot, exclude_tests)
         finally:
             self._cleanup_ramfs()
+            self._cleanup_python_in_repo_root()
 
     def _run_smoke_test(self, sysroot: Path) -> None:
         """Run the layer-2 smoke test."""
@@ -1103,6 +1140,8 @@ class NanvixPythonBuild(ZScript):
         nanvixd_bin = str(nanvixd.resolve())
         timeout = int(os.environ.get("TIMEOUT_SECONDS", str(_DEFAULT_TIMEOUT)))
 
+        initrd: Path | None = None
+
         if deployment == "standalone":
             self._ensure_ramfs(sysroot)
             if not self._ramfs_img or not self._ramfs_img.is_file():
@@ -1111,6 +1150,13 @@ class NanvixPythonBuild(ZScript):
                     code=EXIT_MISSING_DEP,
                     hint="Run `./z build` first.",
                 )
+            # Bundle python3.12 + system daemons into an initrd.
+            self._ensure_python_in_repo_root(sysroot)
+            initrd = self.make_initrd(
+                "python3.12",
+                app_args=["-c", 'print("hello")'],
+                app_env=["PYTHONHOME=/sysroot", "PYTHONDONTWRITEBYTECODE=1"],
+            )
             cmd = [
                 nanvixd_bin,
                 "-bin-dir",
@@ -1118,8 +1164,7 @@ class NanvixPythonBuild(ZScript):
                 "-ramfs",
                 str(self._ramfs_img),
                 "--",
-                "./bin/python3.12",
-                '-c print("hello");PYTHONHOME=/sysroot PYTHONDONTWRITEBYTECODE=1',
+                str(initrd),
             ]
         else:
             cmd = [
@@ -1146,6 +1191,9 @@ class NanvixPythonBuild(ZScript):
                 )
             except subprocess.TimeoutExpired:
                 fh.write(f"\nTIMEOUT after {timeout}s\n")
+            finally:
+                if initrd is not None and initrd.exists():
+                    initrd.unlink()
         elapsed = time.perf_counter() - start
 
         output = log_file.read_text(errors="replace") if log_file.is_file() else ""
@@ -1153,6 +1201,7 @@ class NanvixPythonBuild(ZScript):
 
         if deployment == "standalone":
             self._cleanup_ramfs()
+            self._cleanup_python_in_repo_root()
 
         if "hello" not in output:
             print(output)
@@ -1179,6 +1228,9 @@ class NanvixPythonBuild(ZScript):
         ramfs_img.unlink(missing_ok=True)
         ramfs_sentinel = self.nanvix_dir / ".ramfs-built"
         ramfs_sentinel.unlink(missing_ok=True)
+
+        # Clean python3.12 copy used by make_initrd
+        self._cleanup_python_in_repo_root()
 
         log.success("clean complete")
 

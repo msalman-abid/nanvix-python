@@ -3,4 +3,7 @@ release-assets/
 dist/
 elf-binaries/
 
+# Temporary binary copy used by make_initrd (standalone mode)
+python3.12
+
 logs/
