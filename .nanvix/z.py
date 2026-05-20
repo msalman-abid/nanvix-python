@@ -34,6 +34,7 @@ from nanvix_zutil import (
     TOOLCHAIN_CONTAINER_PATH,
     ZScript,
     log,
+    make_initrd,
 )
 from nanvix_zutil.exitcodes import (
     EXIT_BUILD_FAILURE,
@@ -41,6 +42,7 @@ from nanvix_zutil.exitcodes import (
     EXIT_TEST_FAILURE,
 )
 from nanvix_zutil.github import download_release_asset, resolve_release
+from nanvix_zutil.helpers import InitRdArgs
 
 # Per-test timeout in seconds (overridable via TIMEOUT_SECONDS env var).
 _DEFAULT_TIMEOUT = 300
@@ -143,14 +145,12 @@ class NanvixPythonBuild(ZScript):
                     code=EXIT_MISSING_DEP,
                     hint="Run `./z build` first.",
                 )
-
             initrd = self._ensure_initrd(sysroot)
 
             # Create a temp mount directory with argv.txt pointing to
             # the script inside the ramfs sysroot.
             mount_dir = Path(tempfile.mkdtemp(prefix="nanvix-mount-"))
             (mount_dir / "argv.txt").write_text(f"/sysroot/{script_path}\n")
-
             cmd = [
                 nanvixd,
                 "-bin-dir",
@@ -658,9 +658,10 @@ class NanvixPythonBuild(ZScript):
             return self._initrd
 
         self._ensure_python_in_repo_root(sysroot)
-        initrd: Path = (
-            self.make_initrd(  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
-                "python3.12",
+        initrd: Path = make_initrd(
+            self,
+            "python3.12",
+            InitRdArgs(
                 app_args=[
                     "-S",
                     "-O",
@@ -674,7 +675,7 @@ class NanvixPythonBuild(ZScript):
                     "PYTHONPATH=/sysroot/lib/python3.12/site-packages",
                     "PYTHONDONTWRITEBYTECODE=1",
                 ],
-            )
+            ),
         )
         self._initrd = initrd
         return initrd
@@ -1600,13 +1601,11 @@ class NanvixPythonBuild(ZScript):
                     code=EXIT_MISSING_DEP,
                     hint="Run `./z build` first.",
                 )
-
             initrd = self._ensure_initrd(sysroot)
 
             # Create a temp mount directory with a hello-world bootstrap.py
             mount_dir = Path(tempfile.mkdtemp(prefix="nanvix-bench-"))
             (mount_dir / "bootstrap.py").write_text('print("hello")\n')
-
             cmd = [
                 nanvixd_bin,
                 "-bin-dir",
