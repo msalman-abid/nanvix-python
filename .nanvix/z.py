@@ -119,15 +119,16 @@ class NanvixPythonBuild(ZScript):
         *,
         timeout: int | None = None,
     ) -> None:
-        """Run a Python script under nanvixd.
+        """Run a Python script under nanvixd using the _boot.py warm-start protocol.
 
         Uses nanvixd.exe on Windows and nanvixd.elf on Linux/macOS.
         Captures output to *log_file*.  Does NOT raise on non-zero exit
         (the caller inspects the log for PASS/FAIL).
 
-        In standalone mode, bundles python3.12 with system daemons into
-        an initrd via make_initrd; a ramfs provides the filesystem
-        (stdlib, site-packages, test scripts).
+        In standalone mode, uses the cached initrd (with _boot.py entry
+        point) and communicates the script to run via a mounted directory
+        containing an argv.txt file.  If a snapshot exists, restores from
+        it for faster startup.
         """
         if timeout is None:
             timeout = int(os.environ.get("TIMEOUT_SECONDS", str(_DEFAULT_TIMEOUT)))
@@ -143,22 +144,33 @@ class NanvixPythonBuild(ZScript):
                     code=EXIT_MISSING_DEP,
                     hint="Run `./z build` first.",
                 )
-            # Bundle python3.12 + system daemons into an initrd.
-            self._ensure_python_in_repo_root(sysroot)
-            initrd = self.make_initrd(
-                "python3.12",
-                app_args=["-B", f"/sysroot/{script_path}"],
-                app_env=["PYTHONHOME=/sysroot", "PYTHONDONTWRITEBYTECODE=1"],
-            )
+
+            initrd = self._ensure_initrd(sysroot)
+
+            # Create a temp mount directory with argv.txt pointing to
+            # the script inside the ramfs sysroot.
+            mount_dir = Path(tempfile.mkdtemp(prefix="nanvix-mount-"))
+            (mount_dir / "argv.txt").write_text(f"/sysroot/{script_path}\n")
+
             cmd = [
                 nanvixd,
                 "-bin-dir",
                 str((sysroot / "bin").resolve()),
                 "-ramfs",
                 str(self._ramfs_img),
-                "--",
-                str(initrd),
+                "-mount",
+                str(mount_dir),
             ]
+
+            # Snapshot support is Windows-only (WHP).
+            snapshot_cbor = sysroot / "snapshots" / "kernel.whp.cbor"
+            if _IS_WINDOWS:
+                cmd.extend(["-kernel-args", "snapshot"])
+                if snapshot_cbor.is_file():
+                    cmd.extend(["-snapshot", str(snapshot_cbor)])
+
+            cmd.extend(["--", str(initrd)])
+
             with log_file.open("w") as fh:
                 try:
                     subprocess.run(
@@ -172,8 +184,7 @@ class NanvixPythonBuild(ZScript):
                 except subprocess.TimeoutExpired:
                     fh.write(f"\nTIMEOUT after {timeout}s\n")
                 finally:
-                    if initrd.exists():
-                        initrd.unlink()
+                    shutil.rmtree(mount_dir, ignore_errors=True)
         else:
             cmd = [
                 nanvixd,
@@ -198,6 +209,8 @@ class NanvixPythonBuild(ZScript):
 
     _ramfs_img: Path | None = None
     _stripped_sysroot: Path | None = None
+    _initrd: Path | None = None
+    _snapshot_dir: Path | None = None
 
     def _ramfs_input_hash(self, sysroot: Path) -> str:
         """Compute a hash representing the current ramfs inputs."""
@@ -226,6 +239,11 @@ class NanvixPythonBuild(ZScript):
             h.update(src.read_bytes())
         for src in sorted(sysroot.glob("test_[0-9]*.py")):
             h.update(src.read_bytes())
+
+        # Factor in _boot.py entry point
+        boot_script = sysroot / "_boot.py"
+        if boot_script.is_file():
+            h.update(boot_script.read_bytes())
 
         return h.hexdigest()
 
@@ -259,6 +277,9 @@ class NanvixPythonBuild(ZScript):
             shutil.copy2(src, stripped_root)
         for src in sysroot.glob("test_*.py"):
             shutil.copy2(src, stripped_root)
+
+        # _boot.pyc is compiled inside _create_stripped_sysroot via
+        # Docker (Python 3.12) and placed at the sysroot root.
 
         # Generate build manifests for post-build inspection
         self._write_build_manifests(sysroot, stripped, work_dir)
@@ -435,6 +456,12 @@ class NanvixPythonBuild(ZScript):
             for f in pandoc_pkg.iterdir():
                 if f.suffix == ".md":
                     f.unlink(missing_ok=True)
+            # Preserve utils.py source: ply uses function docstrings
+            # for parser generation which -OO strips from .pyc files.
+            pandoc_utils = pandoc_pkg / "utils.py"
+            if pandoc_utils.is_file():
+                pandoc_utils_backup = pandoc_pkg / "utils.py.keep"
+                shutil.copy2(pandoc_utils, pandoc_utils_backup)
         docutils_pkg = site_pkg / "docutils"
         if docutils_pkg.is_dir():
             for ext in ("*.css", "*.js", "*.odt", "*.sty"):
@@ -443,7 +470,27 @@ class NanvixPythonBuild(ZScript):
 
         # Pre-compile .py → .pyc using Docker toolchain (Python 3.12)
         # then strip .py sources so ramfs ships only bytecode.
+        #
+        # Place _boot.py inside pylib so it's compiled with the correct
+        # Python 3.12 magic number (host Python may differ).  After
+        # precompilation, move the resulting .pyc to the sysroot root.
+        boot_src = self.repo_root / "lib" / "nanvix" / "_boot.py"
+        boot_in_pylib = pylib / "_boot.py"
+        if boot_src.is_file():
+            shutil.copy2(boot_src, boot_in_pylib)
+
         self._precompile_pyc(pylib)
+
+        # Restore pandoc/utils.py source (ply needs docstrings at runtime)
+        pandoc_utils_backup = pylib / "site-packages" / "pandoc" / "utils.py.keep"
+        if pandoc_utils_backup.is_file():
+            pandoc_utils_dst = pandoc_utils_backup.with_suffix("")
+            shutil.move(str(pandoc_utils_backup), str(pandoc_utils_dst))
+
+        # Move _boot.pyc from pylib to the sysroot root
+        boot_pyc_in_pylib = pylib / "_boot.pyc"
+        if boot_pyc_in_pylib.is_file():
+            shutil.move(str(boot_pyc_in_pylib), str(root / "_boot.pyc"))
 
     def _precompile_pyc(self, pylib: Path) -> None:
         """Pre-compile .py to .pyc using Docker toolchain's Python 3.12.
@@ -467,7 +514,7 @@ class NanvixPythonBuild(ZScript):
         script = (
             f"mkdir -p {container_work} && "
             f"tar -xf - -C {container_work} && "
-            f"python3 -m compileall -b -q {container_work} && "
+            f"python3 -O -m compileall -b -q {container_work} && "
             f"find {container_work} -name '*.py' -delete && "
             f"tar -cf - -C {container_work} ."
         )
@@ -514,6 +561,142 @@ class NanvixPythonBuild(ZScript):
         if self._stripped_sysroot and self._stripped_sysroot.is_dir():
             shutil.rmtree(self._stripped_sysroot, ignore_errors=True)
             self._stripped_sysroot = None
+
+    # -- Initrd / snapshot helpers -----------------------------------------
+
+    def _install_boot_script(self, sysroot: Path) -> None:
+        """Install the nanvix package and _boot.py entry point into sysroot.
+
+        Copies:
+        - lib/nanvix/ → sysroot/lib/python3.12/nanvix/ (runtime package)
+        - lib/nanvix/_boot.py → sysroot/_boot.py (initrd entry point)
+        """
+        nanvix_pkg_src = self.repo_root / "lib" / "nanvix"
+        if not nanvix_pkg_src.is_dir():
+            log.fatal(
+                "lib/nanvix/ not found.",
+                code=EXIT_BUILD_FAILURE,
+                hint="Ensure the repository is intact.",
+            )
+
+        # Install nanvix package into stdlib so 'import nanvix' works
+        nanvix_pkg_dst = sysroot / "lib" / "python3.12" / "nanvix"
+        if nanvix_pkg_dst.exists():
+            shutil.rmtree(nanvix_pkg_dst)
+        shutil.copytree(nanvix_pkg_src, nanvix_pkg_dst)
+
+        # Place _boot.py at sysroot root as the initrd entry point
+        boot_src = nanvix_pkg_src / "_boot.py"
+        shutil.copy2(boot_src, sysroot / "_boot.py")
+
+    def _ensure_initrd(self, sysroot: Path) -> Path:
+        """Build or reuse the multi-binary initrd with _boot.py as entry point.
+
+        The initrd bundles python3.12 + system daemons and uses the
+        nanvix._boot warm-start protocol as entry point.  The caller
+        must pass ``-kernel-args snapshot`` to nanvixd to enable
+        snapshot support in the kernel.
+        """
+        if self._initrd and self._initrd.is_file():
+            return self._initrd
+
+        self._ensure_python_in_repo_root(sysroot)
+        initrd = self.make_initrd(
+            "python3.12",
+            app_args=[
+                "-S",
+                "-O",
+                "-B",
+                "-X",
+                "frozen_modules=on",
+                "/sysroot/_boot.pyc",
+            ],
+            app_env=[
+                "PYTHONHOME=/sysroot",
+                "PYTHONPATH=/sysroot/lib/python3.12/site-packages",
+                "PYTHONDONTWRITEBYTECODE=1",
+            ],
+        )
+        self._initrd = initrd
+        return initrd
+
+    def _generate_snapshot(self, sysroot: Path) -> Path:
+        """Generate VM snapshot via cold boot (no -mount).
+
+        Boots nanvixd with the initrd and ramfs. The _boot.py entry
+        point calls nanvix.snapshot() then tries nanvix.mount() which
+        fails (no -mount flag), causing a clean exit. Snapshot files
+        are written to sysroot/snapshots/.
+
+        Returns the path to the snapshots directory.
+        """
+        if not self._ramfs_img or not self._ramfs_img.is_file():
+            log.fatal(
+                "ramfs image not found (required for snapshot generation).",
+                code=EXIT_MISSING_DEP,
+                hint="Run `./z build` first.",
+            )
+
+        initrd = self._ensure_initrd(sysroot)
+        nanvixd = str((sysroot / "bin" / _nanvixd_binary()).resolve())
+        timeout = int(os.environ.get("TIMEOUT_SECONDS", str(_DEFAULT_TIMEOUT)))
+
+        snapshots_dir = sysroot / "snapshots"
+        snapshots_dir.mkdir(exist_ok=True)
+
+        log.info("generating VM snapshot (cold boot)")
+        tmp = Path(tempfile.gettempdir())
+        log_file = tmp / "snapshot-gen.log"
+
+        cmd = [
+            nanvixd,
+            "-bin-dir",
+            str((sysroot / "bin").resolve()),
+            "-ramfs",
+            str(self._ramfs_img),
+            "-kernel-args",
+            "snapshot",
+            "--",
+            str(initrd),
+        ]
+        with log_file.open("w") as fh:
+            try:
+                subprocess.run(
+                    cmd,
+                    cwd=sysroot,
+                    stdin=subprocess.DEVNULL,
+                    stdout=fh,
+                    stderr=fh,
+                    timeout=timeout,
+                )
+            except subprocess.TimeoutExpired:
+                fh.write(f"\nTIMEOUT after {timeout}s\n")
+                log.fatal(
+                    "snapshot generation timed out",
+                    code=EXIT_BUILD_FAILURE,
+                )
+
+        # Verify snapshot files were created
+        vmem = snapshots_dir / "kernel.vmem"
+        cbor = snapshots_dir / "kernel.whp.cbor"
+        if not vmem.is_file() or not cbor.is_file():
+            output = log_file.read_text(errors="replace") if log_file.is_file() else ""
+            print(output)
+            log.fatal(
+                "snapshot generation failed — snapshot files not found",
+                code=EXIT_BUILD_FAILURE,
+            )
+        log_file.unlink(missing_ok=True)
+
+        self._snapshot_dir = snapshots_dir
+        log.success("VM snapshot generated")
+        return snapshots_dir
+
+    def _cleanup_initrd(self) -> None:
+        """Remove the cached initrd file."""
+        if self._initrd and self._initrd.exists():
+            self._initrd.unlink()
+            self._initrd = None
 
     # -- pip site-packages installer ----------------------------------------
 
@@ -724,9 +907,15 @@ class NanvixPythonBuild(ZScript):
         # Patch openpyxl to use et_xmlfile instead of lxml.etree.xmlfile
         self._patch_openpyxl_lxml(site_pkg)
 
+        # Install _boot.py warm-start entry point into sysroot root
+        self._install_boot_script(sysroot)
+
         # Build ramfs image for standalone deployment
         if self.config.deployment_mode == "standalone":
             self._ensure_ramfs(sysroot)
+
+            # Build the multi-binary initrd with _boot.py as entry point
+            self._ensure_initrd(sysroot)
 
         log.success("build complete")
 
@@ -783,6 +972,9 @@ class NanvixPythonBuild(ZScript):
         # When NANVIX_PREBUILT_RAMFS is set (e.g. by CI to reuse the
         # Linux-built ramfs on Windows), skip the rebuild entirely.
         if deployment == "standalone":
+            # Install _boot.py entry point into sysroot
+            self._install_boot_script(sysroot)
+
             prebuilt = os.environ.get("NANVIX_PREBUILT_RAMFS")
             if prebuilt:
                 p = Path(prebuilt)
@@ -795,6 +987,14 @@ class NanvixPythonBuild(ZScript):
                 self._ramfs_img = p
             else:
                 self._ensure_ramfs(sysroot)
+
+            # Generate snapshot for warm-start test execution.
+            # This cold-boots once; all subsequent test runs restore
+            # from the snapshot, skipping kernel/daemon/CPython init.
+            # Snapshots are only supported on Windows (WHP); Linux/KVM
+            # CI runs use cold boot for each test.
+            if _IS_WINDOWS:
+                self._generate_snapshot(sysroot)
 
         # Standalone exclusions
         exclude_tests = os.environ.get("EXCLUDE_TESTS", "")
@@ -814,6 +1014,7 @@ class NanvixPythonBuild(ZScript):
                 self._run_functional_tests(sysroot, exclude_tests)
         finally:
             self._cleanup_ramfs()
+            self._cleanup_initrd()
             self._cleanup_python_in_repo_root()
 
     def _run_smoke_test(self, sysroot: Path) -> None:
@@ -1025,6 +1226,8 @@ class NanvixPythonBuild(ZScript):
                 )
             log.info("release: building ramfs image")
             try:
+                # Install _boot.py into sysroot and build ramfs
+                self._install_boot_script(sysroot)
                 self._ensure_ramfs(sysroot)
                 if self._ramfs_img and self._ramfs_img.is_file():
                     shutil.copy2(self._ramfs_img, bundle_dir / "nanvix_rootfs.img")
@@ -1034,34 +1237,85 @@ class NanvixPythonBuild(ZScript):
                         code=EXIT_BUILD_FAILURE,
                         hint="Ensure `./z build` completed successfully.",
                     )
+
+                # Build multi-binary initrd with _boot.py as entry point
+                log.info("release: building python3.initrd")
+                initrd = self._ensure_initrd(sysroot)
+                shutil.copy2(initrd, bundle_dir / "python3.initrd")
+
+                # Generate VM snapshot for warm-start restore
+                # Snapshots are only supported on Windows (WHP).
+                if _IS_WINDOWS:
+                    log.info("release: generating VM snapshot")
+                    snapshots_dir = self._generate_snapshot(sysroot)
+                    bundle_snapshots = bundle_dir / "snapshots"
+                    bundle_snapshots.mkdir(exist_ok=True)
+                    for snap_file in snapshots_dir.iterdir():
+                        if snap_file.is_file():
+                            shutil.copy2(snap_file, bundle_snapshots)
+
+                # Create mnt/ directory for user workloads
+                (bundle_dir / "mnt").mkdir(exist_ok=True)
+
             finally:
                 self._cleanup_ramfs()
+                self._cleanup_initrd()
 
         # README
         if mode == "standalone":
-            run_cmd = (
-                f"./bin/{nanvixd_name} -ramfs nanvix_rootfs.img -- ./bin/python3.12"
+            cold_cmd = (
+                f"./bin/{nanvixd_name} -ramfs nanvix_rootfs.img"
+                f" -mount ./mnt -- python3.initrd"
+            )
+            warm_cmd = (
+                f"./bin/{nanvixd_name} -snapshot snapshots/kernel.whp.cbor"
+                f" -ramfs nanvix_rootfs.img -mount ./mnt -- python3.initrd"
+            )
+            snap_cmd = (
+                f"./bin/{nanvixd_name} -ramfs nanvix_rootfs.img" f" -- python3.initrd"
+            )
+            readme_text = (
+                f"# Nanvix Python Runtime\n\n"
+                f"Platform: {platform_name}\n"
+                f"Process mode: {mode}\n\n"
+                f"## Quick Start (cold boot)\n\n"
+                f"After extracting the archive, enter the directory and run:\n\n"
+                f"```sh\n"
+                f"cd {asset_prefix}\n"
+                f"{cold_cmd}\n"
+                f"```\n\n"
+                f"On startup CPython executes `/mnt/bootstrap.py` if present,\n"
+                f"otherwise it drops into an interactive REPL.\n\n"
+                f"## Fast Start (warm restore via snapshot)\n\n"
+                f"A pre-built snapshot is included in `snapshots/`. "
+                f"Restore from it to skip cold boot + Python initialization:\n\n"
+                f"```sh\n"
+                f"{warm_cmd}\n"
+                f"```\n\n"
+                f"To recreate the snapshot (e.g. after updating the ramfs):\n\n"
+                f"```sh\n"
+                f"{snap_cmd}\n"
+                f"```\n\n"
+                f"## Running Your Own Script\n\n"
+                f"Place a `bootstrap.py` in a directory and mount it:\n\n"
+                f"```sh\n"
+                f"echo 'print(\"Hello from Nanvix!\")' > mnt/bootstrap.py\n"
+                f"{cold_cmd}\n"
+                f"```\n"
             )
         else:
             run_cmd = f"./bin/{nanvixd_name} -- ./bin/python3.12"
-        readme_text = (
-            f"# Nanvix Python Runtime\n\n"
-            f"Platform: {platform_name}\n"
-            f"Process mode: {mode}\n\n"
-            f"## Quick Start\n\n"
-            f"After extracting the archive, enter the directory and run:\n\n"
-            f"```sh\n"
-            f"cd {asset_prefix}\n"
-            f"{run_cmd} script.py\n"
-            f"```\n\n"
-            f"**Note:** The `-c` flag only supports code without spaces "
-            f"(a nanvixd limitation).\n"
-            f"Use script files for multi-word Python commands:\n\n"
-            f"```sh\n"
-            f"echo \"print('Hello from Nanvix!')\" > test.py\n"
-            f"{run_cmd} test.py\n"
-            f"```\n"
-        )
+            readme_text = (
+                f"# Nanvix Python Runtime\n\n"
+                f"Platform: {platform_name}\n"
+                f"Process mode: {mode}\n\n"
+                f"## Quick Start\n\n"
+                f"After extracting the archive, enter the directory and run:\n\n"
+                f"```sh\n"
+                f"cd {asset_prefix}\n"
+                f"{run_cmd} script.py\n"
+                f"```\n"
+            )
         (bundle_dir / "README.md").write_text(readme_text)
 
         # Validate bundle
@@ -1070,11 +1324,28 @@ class NanvixPythonBuild(ZScript):
             f"bin/{nanvixd_name}",
             "bin/kernel.elf",
             "bin/python3.12",
-            "lib/python3.12/os.py",
-            "lib/python3.12/site.py",
         ]
         if mode == "standalone":
-            required.append("nanvix_rootfs.img")
+            required.extend(
+                [
+                    "nanvix_rootfs.img",
+                    "python3.initrd",
+                ]
+            )
+            if _IS_WINDOWS:
+                required.extend(
+                    [
+                        "snapshots/kernel.vmem",
+                        "snapshots/kernel.whp.cbor",
+                    ]
+                )
+        else:
+            required.extend(
+                [
+                    "lib/python3.12/os.py",
+                    "lib/python3.12/site.py",
+                ]
+            )
         if mode == "multi-process":
             required.extend(["bin/linuxd.elf", "bin/uservm.elf"])
         missing = [f for f in required if not (bundle_dir / f).is_file()]
@@ -1140,7 +1411,7 @@ class NanvixPythonBuild(ZScript):
         nanvixd_bin = str(nanvixd.resolve())
         timeout = int(os.environ.get("TIMEOUT_SECONDS", str(_DEFAULT_TIMEOUT)))
 
-        initrd: Path | None = None
+        mount_dir: Path | None = None
 
         if deployment == "standalone":
             self._ensure_ramfs(sysroot)
@@ -1150,22 +1421,31 @@ class NanvixPythonBuild(ZScript):
                     code=EXIT_MISSING_DEP,
                     hint="Run `./z build` first.",
                 )
-            # Bundle python3.12 + system daemons into an initrd.
-            self._ensure_python_in_repo_root(sysroot)
-            initrd = self.make_initrd(
-                "python3.12",
-                app_args=["-c", 'print("hello")'],
-                app_env=["PYTHONHOME=/sysroot", "PYTHONDONTWRITEBYTECODE=1"],
-            )
+
+            initrd = self._ensure_initrd(sysroot)
+
+            # Create a temp mount directory with a hello-world bootstrap.py
+            mount_dir = Path(tempfile.mkdtemp(prefix="nanvix-bench-"))
+            (mount_dir / "bootstrap.py").write_text('print("hello")\n')
+
             cmd = [
                 nanvixd_bin,
                 "-bin-dir",
                 str((sysroot / "bin").resolve()),
                 "-ramfs",
                 str(self._ramfs_img),
-                "--",
-                str(initrd),
+                "-mount",
+                str(mount_dir),
             ]
+
+            # Snapshot support is Windows-only (WHP).
+            snapshot_cbor = sysroot / "snapshots" / "kernel.whp.cbor"
+            if _IS_WINDOWS:
+                cmd.extend(["-kernel-args", "snapshot"])
+                if snapshot_cbor.is_file():
+                    cmd.extend(["-snapshot", str(snapshot_cbor)])
+
+            cmd.extend(["--", str(initrd)])
         else:
             cmd = [
                 nanvixd_bin,
@@ -1178,6 +1458,7 @@ class NanvixPythonBuild(ZScript):
         log_file = tmp / "benchmark.log"
 
         log.info("running benchmark: hello world")
+        log.info(f"command: {' '.join(cmd)}")
         start = time.perf_counter()
         with log_file.open("w") as fh:
             try:
@@ -1192,8 +1473,8 @@ class NanvixPythonBuild(ZScript):
             except subprocess.TimeoutExpired:
                 fh.write(f"\nTIMEOUT after {timeout}s\n")
             finally:
-                if initrd is not None and initrd.exists():
-                    initrd.unlink()
+                if mount_dir is not None:
+                    shutil.rmtree(mount_dir, ignore_errors=True)
         elapsed = time.perf_counter() - start
 
         output = log_file.read_text(errors="replace") if log_file.is_file() else ""
@@ -1201,6 +1482,7 @@ class NanvixPythonBuild(ZScript):
 
         if deployment == "standalone":
             self._cleanup_ramfs()
+            self._cleanup_initrd()
             self._cleanup_python_in_repo_root()
 
         if "hello" not in output:
@@ -1228,6 +1510,16 @@ class NanvixPythonBuild(ZScript):
         ramfs_img.unlink(missing_ok=True)
         ramfs_sentinel = self.nanvix_dir / ".ramfs-built"
         ramfs_sentinel.unlink(missing_ok=True)
+
+        # Clean initrd
+        self._cleanup_initrd()
+
+        # Clean snapshot artifacts
+        sysroot_str = self.config.get(CFG_SYSROOT, "")
+        if sysroot_str:
+            snapshots_dir = Path(sysroot_str) / "snapshots"
+            if snapshots_dir.is_dir():
+                shutil.rmtree(snapshots_dir)
 
         # Clean python3.12 copy used by make_initrd
         self._cleanup_python_in_repo_root()

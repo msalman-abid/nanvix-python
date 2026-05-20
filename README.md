@@ -18,7 +18,7 @@ run Python under `nanvixd`:
 gh release download --repo nanvix/nanvix-python --pattern "*.tar.gz" --clobber
 tar -xzf microvm-standalone-256mb.tar.gz
 cd microvm-standalone-256mb
-./bin/nanvixd.elf -- ./bin/python3.12 -c "print('Hello from Nanvix!')"
+./bin/nanvixd.elf -snapshot snapshots/kernel.whp.cbor -ramfs nanvix_rootfs.img -mount ./mnt -- python3.initrd
 ```
 
 ### Windows
@@ -27,19 +27,84 @@ cd microvm-standalone-256mb
 gh release download --repo nanvix/nanvix-python --pattern "*.zip" --clobber
 Expand-Archive microvm-standalone-256mb.zip -DestinationPath .
 cd microvm-standalone-256mb
-.\bin\nanvixd.exe -- .\bin\python3.12 -c "print('Hello from Nanvix!')"
+.\bin\nanvixd.exe -snapshot snapshots\kernel.whp.cbor -ramfs nanvix_rootfs.img -mount .\mnt -- python3.initrd
 ```
 
-> **Note:** The `-c` flag only works with code that contains no spaces
-> (a nanvixd argument-splitting limitation). Use script files instead.
+The release ships with a **pre-built snapshot** so there is no cold
+boot overhead on first run. On restore, `nanvixd` mounts the host
+`mnt/` directory at `/mnt` inside the guest, then CPython executes
+`/mnt/bootstrap.py` if present. Otherwise it drops into an interactive
+REPL.
+
+### Release Bundle Layout
+
+```
+microvm-standalone-256mb/
+├── bin/
+│   ├── kernel.elf          # Nanvix microkernel
+│   └── nanvixd.exe (.elf)  # Host-side hypervisor
+├── mnt/                    # Place your workload here
+├── snapshots/
+│   ├── kernel.vmem         # Pre-built memory snapshot (256 MB)
+│   └── kernel.whp.cbor    # Pre-built VM state
+├── nanvix_rootfs.img       # RAMFS with CPython stdlib + packages
+├── python3.initrd          # Multi-binary initrd (daemons + CPython)
+└── README.md
+```
+
+### Workload Dispatch
+
+Place your entry point in the `mnt/` directory. The guest warm-start
+protocol looks for workloads in this order:
+
+1. **`mnt/bootstrap.py`** — executed directly if present
+2. **`mnt/argv.txt`** — one argument per line; supports `-m module`
+   syntax or a path to a script inside `/mnt`
+3. **Neither** — drops into an interactive Python REPL
+
+Example `bootstrap.py`:
+
+```python
+import json
+print(json.dumps({"hello": "nanvix"}))
+```
+
+### Cold Boot (Without Snapshot)
+
+To run without the pre-built snapshot (full cold boot):
+
+```bash
+# Linux
+./bin/nanvixd.elf -ramfs nanvix_rootfs.img -mount ./mnt -- python3.initrd
+
+# Windows
+.\bin\nanvixd.exe -ramfs nanvix_rootfs.img -mount .\mnt -- python3.initrd
+```
+
+### Recreating the Snapshot
+
+If you need to regenerate the snapshot (e.g., after modifying the
+ramfs), run without `-mount` and without `-snapshot`:
+
+```bash
+# Linux
+./bin/nanvixd.elf -ramfs nanvix_rootfs.img -- python3.initrd
+
+# Windows
+.\bin\nanvixd.exe -ramfs nanvix_rootfs.img -- python3.initrd
+```
+
+The VM will boot, initialize CPython, take a snapshot into
+`snapshots/kernel.vmem` + `snapshots/kernel.whp.cbor`, and exit.
 
 ### Using Built-in Packages
 
 All pure Python packages are pre-installed. No `pip install` is needed:
 
 ```bash
-echo 'import json; print(json.dumps({"hello": "nanvix"}))' > test.py
-./bin/nanvixd.elf -- ./bin/python3.12 test.py
+# Place your script in the mnt/ directory
+echo 'import json; print(json.dumps({"hello": "nanvix"}))' > mnt/bootstrap.py
+./bin/nanvixd.elf -snapshot snapshots/kernel.whp.cbor -ramfs nanvix_rootfs.img -mount ./mnt -- python3.initrd
 ```
 
 ## Building from Source
