@@ -988,7 +988,9 @@ class NanvixPythonBuild(ZScript):
         exclude_tests = os.environ.get("EXCLUDE_TESTS", "")
         if deployment == "standalone" and not exclude_tests:
             # Stripped from standalone ramfs: plotly(83), setuptools(89), wheel(90)
-            exclude_tests = "83 89 90"
+            # pandoc(79): PLY lexer requires .py source inspection, incompatible
+            #   with bytecode-only (.pyc) ramfs
+            exclude_tests = "79 83 89 90"
 
         # Determine which tests to run
         targets = (
