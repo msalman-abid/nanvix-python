@@ -979,7 +979,10 @@ class NanvixPythonBuild(ZScript):
             # Generate snapshot for warm-start test execution.
             # This cold-boots once; all subsequent test runs restore
             # from the snapshot, skipping kernel/daemon/CPython init.
-            self._generate_snapshot(sysroot)
+            # Snapshots are only supported on Windows (WHP); Linux/KVM
+            # CI runs use cold boot for each test.
+            if _IS_WINDOWS:
+                self._generate_snapshot(sysroot)
 
         # Standalone exclusions
         exclude_tests = os.environ.get("EXCLUDE_TESTS", "")
@@ -1229,13 +1232,15 @@ class NanvixPythonBuild(ZScript):
                 shutil.copy2(initrd, bundle_dir / "python3.initrd")
 
                 # Generate VM snapshot for warm-start restore
-                log.info("release: generating VM snapshot")
-                snapshots_dir = self._generate_snapshot(sysroot)
-                bundle_snapshots = bundle_dir / "snapshots"
-                bundle_snapshots.mkdir(exist_ok=True)
-                for snap_file in snapshots_dir.iterdir():
-                    if snap_file.is_file():
-                        shutil.copy2(snap_file, bundle_snapshots)
+                # Snapshots are only supported on Windows (WHP).
+                if _IS_WINDOWS:
+                    log.info("release: generating VM snapshot")
+                    snapshots_dir = self._generate_snapshot(sysroot)
+                    bundle_snapshots = bundle_dir / "snapshots"
+                    bundle_snapshots.mkdir(exist_ok=True)
+                    for snap_file in snapshots_dir.iterdir():
+                        if snap_file.is_file():
+                            shutil.copy2(snap_file, bundle_snapshots)
 
                 # Create mnt/ directory for user workloads
                 (bundle_dir / "mnt").mkdir(exist_ok=True)
@@ -1313,10 +1318,15 @@ class NanvixPythonBuild(ZScript):
                 [
                     "nanvix_rootfs.img",
                     "python3.initrd",
-                    "snapshots/kernel.vmem",
-                    "snapshots/kernel.whp.cbor",
                 ]
             )
+            if _IS_WINDOWS:
+                required.extend(
+                    [
+                        "snapshots/kernel.vmem",
+                        "snapshots/kernel.whp.cbor",
+                    ]
+                )
         else:
             required.extend(
                 [
