@@ -108,6 +108,13 @@ jobs:
         shell: pwsh
         run: nanvix-zutil test
 
+      - name: Upload VM snapshots
+        uses: actions/upload-artifact@v5
+        with:
+          name: nanvix-python-snapshots
+          path: .nanvix/sysroot/snapshots/
+          if-no-files-found: error
+
   release:
     needs: ci
     if: github.event_name != 'pull_request'
@@ -185,7 +192,7 @@ jobs:
           fi
 
   windows-release:
-    needs: [ci, release]
+    needs: [ci, windows-test, release]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     env:
@@ -213,6 +220,12 @@ jobs:
             --pattern "nanvix-windows-x86-microvm-standalone*256mb*.zip" \
             --dir nanvix-windows
           ls -la nanvix-windows/
+
+      - name: Download VM snapshots
+        uses: actions/download-artifact@v5
+        with:
+          name: nanvix-python-snapshots
+          path: snapshots
 
       - name: Create Windows zip
         run: |
@@ -243,6 +256,11 @@ jobs:
           rm -f "$DIST_DIR/bin/nanvixd.elf"
           cp nanvix-win-extract/nanvixd.exe "$DIST_DIR/bin/nanvixd.exe"
           cp nanvix-win-extract/kernel.elf "$DIST_DIR/bin/kernel.elf"
+
+          # Include VM snapshots for warm-start restore
+          mkdir -p "$DIST_DIR/snapshots"
+          cp snapshots/* "$DIST_DIR/snapshots/"
+          echo "Included snapshots: $(ls "$DIST_DIR/snapshots/")"
 
           # Create the Windows zip
           ZIP_NAME="${DIR_NAME}.zip"
