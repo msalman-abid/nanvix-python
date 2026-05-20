@@ -7,3 +7,9 @@ elf-binaries/
 python3.12
 
 logs/
+.nanvix/.ramfs-built
+.nanvix/nanvix_rootfs.img
+.nanvix/manifests/sysroot-full.txt
+.nanvix/manifests/sysroot-trimmed.txt
+.nanvix/manifests/sysroot-ramfs.txt
+python3.img
