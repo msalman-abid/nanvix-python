@@ -39,7 +39,12 @@ def _do_warm_start():
 
     # Step 1: Take snapshot. On cold boot this saves state and continues.
     # On warm restore, execution resumes right after this call.
-    nanvix.snapshot()
+    # On platforms without snapshot support (e.g. Linux/KVM), this is
+    # a no-op — execution simply continues to the mount step.
+    try:
+        nanvix.snapshot()
+    except OSError:
+        pass  # Snapshot not supported on this platform/configuration
 
     # Step 2: Mount host directory. The nanvixd -mount flag specifies
     # which host directory appears at /mnt.

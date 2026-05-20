@@ -158,16 +158,16 @@ class NanvixPythonBuild(ZScript):
                 str((sysroot / "bin").resolve()),
                 "-ramfs",
                 str(self._ramfs_img),
-                "-kernel-args",
-                "snapshot",
                 "-mount",
                 str(mount_dir),
             ]
 
-            # Use snapshot for warm restore if available.
+            # Snapshot support is Windows-only (WHP).
             snapshot_cbor = sysroot / "snapshots" / "kernel.whp.cbor"
-            if snapshot_cbor.is_file():
-                cmd.extend(["-snapshot", str(snapshot_cbor)])
+            if _IS_WINDOWS:
+                cmd.extend(["-kernel-args", "snapshot"])
+                if snapshot_cbor.is_file():
+                    cmd.extend(["-snapshot", str(snapshot_cbor)])
 
             cmd.extend(["--", str(initrd)])
 
@@ -456,6 +456,12 @@ class NanvixPythonBuild(ZScript):
             for f in pandoc_pkg.iterdir():
                 if f.suffix == ".md":
                     f.unlink(missing_ok=True)
+            # Preserve utils.py source: ply uses function docstrings
+            # for parser generation which -OO strips from .pyc files.
+            pandoc_utils = pandoc_pkg / "utils.py"
+            if pandoc_utils.is_file():
+                pandoc_utils_backup = pandoc_pkg / "utils.py.keep"
+                shutil.copy2(pandoc_utils, pandoc_utils_backup)
         docutils_pkg = site_pkg / "docutils"
         if docutils_pkg.is_dir():
             for ext in ("*.css", "*.js", "*.odt", "*.sty"):
@@ -474,6 +480,12 @@ class NanvixPythonBuild(ZScript):
             shutil.copy2(boot_src, boot_in_pylib)
 
         self._precompile_pyc(pylib)
+
+        # Restore pandoc/utils.py source (ply needs docstrings at runtime)
+        pandoc_utils_backup = pylib / "site-packages" / "pandoc" / "utils.py.keep"
+        if pandoc_utils_backup.is_file():
+            pandoc_utils_dst = pandoc_utils_backup.with_suffix("")
+            shutil.move(str(pandoc_utils_backup), str(pandoc_utils_dst))
 
         # Move _boot.pyc from pylib to the sysroot root
         boot_pyc_in_pylib = pylib / "_boot.pyc"
@@ -502,7 +514,7 @@ class NanvixPythonBuild(ZScript):
         script = (
             f"mkdir -p {container_work} && "
             f"tar -xf - -C {container_work} && "
-            f"python3 -OO -m compileall -b -q {container_work} && "
+            f"python3 -O -m compileall -b -q {container_work} && "
             f"find {container_work} -name '*.py' -delete && "
             f"tar -cf - -C {container_work} ."
         )
@@ -593,7 +605,7 @@ class NanvixPythonBuild(ZScript):
             "python3.12",
             app_args=[
                 "-S",
-                "-OO",
+                "-O",
                 "-B",
                 "-X",
                 "frozen_modules=on",
@@ -988,9 +1000,7 @@ class NanvixPythonBuild(ZScript):
         exclude_tests = os.environ.get("EXCLUDE_TESTS", "")
         if deployment == "standalone" and not exclude_tests:
             # Stripped from standalone ramfs: plotly(83), setuptools(89), wheel(90)
-            # pandoc(79): PLY lexer requires .py source inspection, incompatible
-            #   with bytecode-only (.pyc) ramfs
-            exclude_tests = "79 83 89 90"
+            exclude_tests = "83 89 90"
 
         # Determine which tests to run
         targets = (
@@ -1424,16 +1434,16 @@ class NanvixPythonBuild(ZScript):
                 str((sysroot / "bin").resolve()),
                 "-ramfs",
                 str(self._ramfs_img),
-                "-kernel-args",
-                "snapshot",
                 "-mount",
                 str(mount_dir),
             ]
 
-            # Use snapshot for warm restore if available.
+            # Snapshot support is Windows-only (WHP).
             snapshot_cbor = sysroot / "snapshots" / "kernel.whp.cbor"
-            if snapshot_cbor.is_file():
-                cmd.extend(["-snapshot", str(snapshot_cbor)])
+            if _IS_WINDOWS:
+                cmd.extend(["-kernel-args", "snapshot"])
+                if snapshot_cbor.is_file():
+                    cmd.extend(["-snapshot", str(snapshot_cbor)])
 
             cmd.extend(["--", str(initrd)])
         else:
