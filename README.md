@@ -18,8 +18,12 @@ run Python under `nanvixd`:
 gh release download --repo nanvix/nanvix-python --pattern "*.tar.gz" --clobber
 tar -xzf microvm-standalone-256mb.tar.gz
 cd microvm-standalone-256mb
-./bin/nanvixd.elf -snapshot snapshots/kernel.whp.cbor -ramfs nanvix_rootfs.img -mount ./mnt -- python3.initrd
+./bin/nanvixd.elf -ramfs nanvix_rootfs.img -mount ./mnt -- python3.initrd
 ```
+
+On startup `nanvixd` mounts the host `mnt/` directory at `/mnt`
+inside the guest, then CPython executes `/mnt/bootstrap.py` if
+present. Otherwise it drops into an interactive REPL.
 
 ### Windows
 
@@ -27,30 +31,74 @@ cd microvm-standalone-256mb
 gh release download --repo nanvix/nanvix-python --pattern "*.zip" --clobber
 Expand-Archive microvm-standalone-256mb.zip -DestinationPath .
 cd microvm-standalone-256mb
-.\bin\nanvixd.exe -snapshot snapshots\kernel.whp.cbor -ramfs nanvix_rootfs.img -mount .\mnt -- python3.initrd
+.\bin\nanvixd.exe -ramfs nanvix_rootfs.img -mount .\mnt -- python3.initrd
 ```
 
-The release ships with a **pre-built snapshot** so there is no cold
-boot overhead on first run. On restore, `nanvixd` mounts the host
-`mnt/` directory at `/mnt` inside the guest, then CPython executes
-`/mnt/bootstrap.py` if present. Otherwise it drops into an interactive
-REPL.
+#### Fast Start (warm restore via snapshot)
+
+Snapshots let you skip the cold boot + Python initialization on
+every run. They are only supported on Windows (via the Windows
+Hypervisor Platform — WHP) and are **hardware-specific**, so they
+cannot be shipped pre-built: each user must generate one locally
+on the host that will restore from it. Cold boot takes ~2 s, so
+generation is a one-time cost.
+
+##### Generating a snapshot
+
+From the bundle directory, cold-boot once with `-kernel-args
+snapshot` and no `-mount`:
+
+```powershell
+mkdir snapshots -ErrorAction SilentlyContinue
+.\bin\nanvixd.exe -bin-dir .\bin -ramfs nanvix_rootfs.img `
+    -kernel-args snapshot -- python3.initrd
+```
+
+The VM exits cleanly after the kernel writes the snapshot. Confirm
+success with:
+
+```powershell
+Get-ChildItem snapshots\kernel.vmem, snapshots\kernel.whp.cbor
+```
+
+##### Restoring from a snapshot
+
+Once a snapshot exists, every subsequent run can warm-restore from
+it:
+
+```powershell
+.\bin\nanvixd.exe -snapshot snapshots\kernel.whp.cbor `
+    -ramfs nanvix_rootfs.img -mount .\mnt `
+    -kernel-args snapshot -- python3.initrd
+```
+
+##### Regenerating a snapshot
+
+A snapshot is tied to both the host hardware and the contents of
+the ramfs image. Regenerate it whenever you:
+
+- move the bundle to a different machine (or change CPU features);
+- replace `nanvix_rootfs.img` or `python3.initrd`;
+- upgrade to a new release.
+
+Delete `snapshots\` and repeat the generation step above.
 
 ### Release Bundle Layout
 
 ```
 microvm-standalone-256mb/
 ├── bin/
-│   ├── kernel.elf          # Nanvix microkernel
-│   └── nanvixd.exe (.elf)  # Host-side hypervisor
-├── mnt/                    # Place your workload here
-├── snapshots/
-│   ├── kernel.vmem         # Pre-built memory snapshot (256 MB)
-│   └── kernel.whp.cbor    # Pre-built VM state
-├── nanvix_rootfs.img       # RAMFS with CPython stdlib + packages
-├── python3.initrd          # Multi-binary initrd (daemons + CPython)
+│   ├── kernel.elf            # Nanvix microkernel
+│   └── nanvixd.exe (.elf)    # Host-side hypervisor
+├── mnt/                      # Place your workload here
+├── nanvix_rootfs.img         # RAMFS with CPython stdlib + packages
+├── python3.initrd            # Multi-binary initrd (daemons + CPython)
 └── README.md
 ```
+
+On Windows, generating a snapshot (see *Fast Start* above) creates
+a `snapshots/` directory in the bundle containing `kernel.vmem`
+and `kernel.whp.cbor`.
 
 ### Workload Dispatch
 
@@ -69,34 +117,6 @@ import json
 print(json.dumps({"hello": "nanvix"}))
 ```
 
-### Cold Boot (Without Snapshot)
-
-To run without the pre-built snapshot (full cold boot):
-
-```bash
-# Linux
-./bin/nanvixd.elf -ramfs nanvix_rootfs.img -mount ./mnt -- python3.initrd
-
-# Windows
-.\bin\nanvixd.exe -ramfs nanvix_rootfs.img -mount .\mnt -- python3.initrd
-```
-
-### Recreating the Snapshot
-
-If you need to regenerate the snapshot (e.g., after modifying the
-ramfs), run without `-mount` and without `-snapshot`:
-
-```bash
-# Linux
-./bin/nanvixd.elf -ramfs nanvix_rootfs.img -- python3.initrd
-
-# Windows
-.\bin\nanvixd.exe -ramfs nanvix_rootfs.img -- python3.initrd
-```
-
-The VM will boot, initialize CPython, take a snapshot into
-`snapshots/kernel.vmem` + `snapshots/kernel.whp.cbor`, and exit.
-
 ### Using Built-in Packages
 
 All pure Python packages are pre-installed. No `pip install` is needed:
@@ -104,7 +124,7 @@ All pure Python packages are pre-installed. No `pip install` is needed:
 ```bash
 # Place your script in the mnt/ directory
 echo 'import json; print(json.dumps({"hello": "nanvix"}))' > mnt/bootstrap.py
-./bin/nanvixd.elf -snapshot snapshots/kernel.whp.cbor -ramfs nanvix_rootfs.img -mount ./mnt -- python3.initrd
+./bin/nanvixd.elf -ramfs nanvix_rootfs.img -mount ./mnt -- python3.initrd
 ```
 
 ## Building from Source
@@ -128,6 +148,17 @@ cd nanvix-python
 ./z build      # Install pip packages and generate ramfs image
 ./z test       # Run smoke test and functional tests
 ./z release    # Package standalone runtime bundle into dist/
+```
+
+On Windows, `./z test` additionally runs a snapshot smoke test
+(`test-snapshot`) that cold-boots once to produce a WHP snapshot,
+then warm-restores from it to run a hello-world workload. Select
+individual targets with:
+
+```bash
+./z test -- test-smoke
+./z test -- test-snapshot      # Windows + standalone only
+./z test -- test-integration
 ```
 
 On Windows, use the PowerShell wrapper (`.\z.ps1`) or the

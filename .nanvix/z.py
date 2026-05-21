@@ -127,8 +127,7 @@ class NanvixPythonBuild(ZScript):
 
         In standalone mode, uses the cached initrd (with _boot.py entry
         point) and communicates the script to run via a mounted directory
-        containing an argv.txt file.  If a snapshot exists, restores from
-        it for faster startup.
+        containing an argv.txt file.
         """
         if timeout is None:
             timeout = int(os.environ.get("TIMEOUT_SECONDS", str(_DEFAULT_TIMEOUT)))
@@ -160,16 +159,9 @@ class NanvixPythonBuild(ZScript):
                 str(self._ramfs_img),
                 "-mount",
                 str(mount_dir),
+                "--",
+                str(initrd),
             ]
-
-            # Snapshot support is Windows-only (WHP).
-            snapshot_cbor = sysroot / "snapshots" / "kernel.whp.cbor"
-            if _IS_WINDOWS:
-                cmd.extend(["-kernel-args", "snapshot"])
-                if snapshot_cbor.is_file():
-                    cmd.extend(["-snapshot", str(snapshot_cbor)])
-
-            cmd.extend(["--", str(initrd)])
 
             with log_file.open("w") as fh:
                 try:
@@ -210,7 +202,6 @@ class NanvixPythonBuild(ZScript):
     _ramfs_img: Path | None = None
     _stripped_sysroot: Path | None = None
     _initrd: Path | None = None
-    _snapshot_dir: Path | None = None
 
     def _ramfs_input_hash(self, sysroot: Path) -> str:
         """Compute a hash representing the current ramfs inputs."""
@@ -593,104 +584,32 @@ class NanvixPythonBuild(ZScript):
         """Build or reuse the multi-binary initrd with _boot.py as entry point.
 
         The initrd bundles python3.12 + system daemons and uses the
-        nanvix._boot warm-start protocol as entry point.  The caller
-        must pass ``-kernel-args snapshot`` to nanvixd to enable
-        snapshot support in the kernel.
+        nanvix._boot warm-start protocol as entry point.
         """
         if self._initrd and self._initrd.is_file():
             return self._initrd
 
         self._ensure_python_in_repo_root(sysroot)
-        initrd = self.make_initrd(
-            "python3.12",
-            app_args=[
-                "-S",
-                "-O",
-                "-B",
-                "-X",
-                "frozen_modules=on",
-                "/sysroot/_boot.pyc",
-            ],
-            app_env=[
-                "PYTHONHOME=/sysroot",
-                "PYTHONPATH=/sysroot/lib/python3.12/site-packages",
-                "PYTHONDONTWRITEBYTECODE=1",
-            ],
+        initrd: Path = (
+            self.make_initrd(  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
+                "python3.12",
+                app_args=[
+                    "-S",
+                    "-O",
+                    "-B",
+                    "-X",
+                    "frozen_modules=on",
+                    "/sysroot/_boot.pyc",
+                ],
+                app_env=[
+                    "PYTHONHOME=/sysroot",
+                    "PYTHONPATH=/sysroot/lib/python3.12/site-packages",
+                    "PYTHONDONTWRITEBYTECODE=1",
+                ],
+            )
         )
         self._initrd = initrd
         return initrd
-
-    def _generate_snapshot(self, sysroot: Path) -> Path:
-        """Generate VM snapshot via cold boot (no -mount).
-
-        Boots nanvixd with the initrd and ramfs. The _boot.py entry
-        point calls nanvix.snapshot() then tries nanvix.mount() which
-        fails (no -mount flag), causing a clean exit. Snapshot files
-        are written to sysroot/snapshots/.
-
-        Returns the path to the snapshots directory.
-        """
-        if not self._ramfs_img or not self._ramfs_img.is_file():
-            log.fatal(
-                "ramfs image not found (required for snapshot generation).",
-                code=EXIT_MISSING_DEP,
-                hint="Run `./z build` first.",
-            )
-
-        initrd = self._ensure_initrd(sysroot)
-        nanvixd = str((sysroot / "bin" / _nanvixd_binary()).resolve())
-        timeout = int(os.environ.get("TIMEOUT_SECONDS", str(_DEFAULT_TIMEOUT)))
-
-        snapshots_dir = sysroot / "snapshots"
-        snapshots_dir.mkdir(exist_ok=True)
-
-        log.info("generating VM snapshot (cold boot)")
-        tmp = Path(tempfile.gettempdir())
-        log_file = tmp / "snapshot-gen.log"
-
-        cmd = [
-            nanvixd,
-            "-bin-dir",
-            str((sysroot / "bin").resolve()),
-            "-ramfs",
-            str(self._ramfs_img),
-            "-kernel-args",
-            "snapshot",
-            "--",
-            str(initrd),
-        ]
-        with log_file.open("w") as fh:
-            try:
-                subprocess.run(
-                    cmd,
-                    cwd=sysroot,
-                    stdin=subprocess.DEVNULL,
-                    stdout=fh,
-                    stderr=fh,
-                    timeout=timeout,
-                )
-            except subprocess.TimeoutExpired:
-                fh.write(f"\nTIMEOUT after {timeout}s\n")
-                log.fatal(
-                    "snapshot generation timed out",
-                    code=EXIT_BUILD_FAILURE,
-                )
-
-        # Verify snapshot files were created
-        vmem = snapshots_dir / "kernel.vmem"
-        cbor = snapshots_dir / "kernel.whp.cbor"
-        if not vmem.is_file() or not cbor.is_file():
-            output = log_file.read_text(errors="replace") if log_file.is_file() else ""
-            print(output)
-            log.fatal(
-                "snapshot generation failed — snapshot files not found",
-                code=EXIT_BUILD_FAILURE,
-            )
-        log_file.unlink(missing_ok=True)
-
-        self._snapshot_dir = snapshots_dir
-        log.success("VM snapshot generated")
-        return snapshots_dir
 
     def _cleanup_initrd(self) -> None:
         """Remove the cached initrd file."""
@@ -988,14 +907,6 @@ class NanvixPythonBuild(ZScript):
             else:
                 self._ensure_ramfs(sysroot)
 
-            # Generate snapshot for warm-start test execution.
-            # This cold-boots once; all subsequent test runs restore
-            # from the snapshot, skipping kernel/daemon/CPython init.
-            # Snapshots are only supported on Windows (WHP); Linux/KVM
-            # CI runs use cold boot for each test.
-            if _IS_WINDOWS:
-                self._generate_snapshot(sysroot)
-
         # Standalone exclusions
         exclude_tests = os.environ.get("EXCLUDE_TESTS", "")
         if deployment == "standalone" and not exclude_tests:
@@ -1003,13 +914,16 @@ class NanvixPythonBuild(ZScript):
             exclude_tests = "83 89 90"
 
         # Determine which tests to run
-        targets = (
-            set(self.targets) if self.targets else {"test-smoke", "test-integration"}
-        )
+        default_targets = {"test-smoke", "test-integration"}
+        if deployment == "standalone" and _IS_WINDOWS:
+            default_targets.add("test-snapshot")
+        targets = set(self.targets) if self.targets else default_targets
 
         try:
             if "test-smoke" in targets:
                 self._run_smoke_test(sysroot)
+            if "test-snapshot" in targets:
+                self._run_snapshot_smoke_test(sysroot)
             if "test-integration" in targets:
                 self._run_functional_tests(sysroot, exclude_tests)
         finally:
@@ -1042,6 +956,134 @@ class NanvixPythonBuild(ZScript):
             print(output)
         else:
             log.fatal("smoke test produced no output", code=EXIT_TEST_FAILURE)
+
+    def _run_snapshot_smoke_test(self, sysroot: Path) -> None:
+        """Smoke test: generate a VM snapshot then warm-restore hello-world.
+
+        Snapshots are only supported on Windows (WHP) and are not
+        portable across machines, so this test is host-local.  It:
+
+          1. Cold-boots nanvixd with ``-kernel-args snapshot`` (no
+             ``-mount``).  The _boot.py entry point calls
+             ``nanvix.snapshot()`` then ``nanvix.mount()`` which fails
+             (no mount provided), causing a clean exit.  The snapshot
+             files are written to ``sysroot/snapshots/``.
+          2. Warm-restores from the snapshot with a ``-mount`` directory
+             whose ``bootstrap.py`` prints ``hello`` and checks for that
+             output.
+        """
+        if not _IS_WINDOWS:
+            log.info("snapshot smoke test: skipped (Windows-only / WHP)")
+            return
+        if self.config.deployment_mode != "standalone":
+            log.info("snapshot smoke test: skipped (standalone-only)")
+            return
+        if not self._ramfs_img or not self._ramfs_img.is_file():
+            log.fatal(
+                "ramfs image not found (required for snapshot smoke test).",
+                code=EXIT_MISSING_DEP,
+                hint="Run `./z build` first.",
+            )
+
+        log.info("=== snapshot smoke test ===")
+        initrd = self._ensure_initrd(sysroot)
+        nanvixd = str((sysroot / "bin" / _nanvixd_binary()).resolve())
+        timeout = int(os.environ.get("TIMEOUT_SECONDS", str(_DEFAULT_TIMEOUT)))
+
+        snapshots_dir = sysroot / "snapshots"
+        snapshots_dir.mkdir(exist_ok=True)
+        vmem = snapshots_dir / "kernel.vmem"
+        cbor = snapshots_dir / "kernel.whp.cbor"
+        vmem.unlink(missing_ok=True)
+        cbor.unlink(missing_ok=True)
+
+        tmp = Path(tempfile.gettempdir())
+
+        # --- Phase 1: cold boot to generate snapshot ---------------------
+        log.info("snapshot smoke test: generating snapshot (cold boot)")
+        gen_log = tmp / "snapshot-gen.log"
+        gen_cmd = [
+            nanvixd,
+            "-bin-dir",
+            str((sysroot / "bin").resolve()),
+            "-ramfs",
+            str(self._ramfs_img),
+            "-kernel-args",
+            "snapshot",
+            "--",
+            str(initrd),
+        ]
+        with gen_log.open("w") as fh:
+            try:
+                subprocess.run(
+                    gen_cmd,
+                    cwd=sysroot,
+                    stdin=subprocess.DEVNULL,
+                    stdout=fh,
+                    stderr=fh,
+                    timeout=timeout,
+                )
+            except subprocess.TimeoutExpired:
+                fh.write(f"\nTIMEOUT after {timeout}s\n")
+                log.fatal(
+                    "snapshot smoke test: generation timed out",
+                    code=EXIT_TEST_FAILURE,
+                )
+
+        if not vmem.is_file() or not cbor.is_file():
+            print(gen_log.read_text(errors="replace") if gen_log.is_file() else "")
+            log.fatal(
+                "snapshot smoke test: snapshot files not produced",
+                code=EXIT_TEST_FAILURE,
+            )
+        gen_log.unlink(missing_ok=True)
+
+        # --- Phase 2: warm restore to run hello-world --------------------
+        log.info("snapshot smoke test: warm-restoring to run hello-world")
+        mount_dir = Path(tempfile.mkdtemp(prefix="nanvix-snap-smoke-"))
+        (mount_dir / "bootstrap.py").write_text('print("hello")\n')
+        run_log = tmp / "snapshot-run.log"
+        run_cmd = [
+            nanvixd,
+            "-bin-dir",
+            str((sysroot / "bin").resolve()),
+            "-snapshot",
+            str(cbor),
+            "-ramfs",
+            str(self._ramfs_img),
+            "-mount",
+            str(mount_dir),
+            "-kernel-args",
+            "snapshot",
+            "--",
+            str(initrd),
+        ]
+        try:
+            with run_log.open("w") as fh:
+                try:
+                    subprocess.run(
+                        run_cmd,
+                        cwd=sysroot,
+                        stdin=subprocess.DEVNULL,
+                        stdout=fh,
+                        stderr=fh,
+                        timeout=timeout,
+                    )
+                except subprocess.TimeoutExpired:
+                    fh.write(f"\nTIMEOUT after {timeout}s\n")
+        finally:
+            shutil.rmtree(mount_dir, ignore_errors=True)
+
+        output = run_log.read_text(errors="replace") if run_log.is_file() else ""
+        run_log.unlink(missing_ok=True)
+
+        if "hello" not in output:
+            print(output)
+            log.fatal(
+                "snapshot smoke test: expected 'hello' not found in output",
+                code=EXIT_TEST_FAILURE,
+            )
+        log.success("snapshot smoke test: PASS")
 
     def _run_functional_tests(self, sysroot: Path, exclude_tests: str) -> None:
         """Run the numbered functional tests."""
@@ -1243,17 +1285,6 @@ class NanvixPythonBuild(ZScript):
                 initrd = self._ensure_initrd(sysroot)
                 shutil.copy2(initrd, bundle_dir / "python3.initrd")
 
-                # Generate VM snapshot for warm-start restore
-                # Snapshots are only supported on Windows (WHP).
-                if _IS_WINDOWS:
-                    log.info("release: generating VM snapshot")
-                    snapshots_dir = self._generate_snapshot(sysroot)
-                    bundle_snapshots = bundle_dir / "snapshots"
-                    bundle_snapshots.mkdir(exist_ok=True)
-                    for snap_file in snapshots_dir.iterdir():
-                        if snap_file.is_file():
-                            shutil.copy2(snap_file, bundle_snapshots)
-
                 # Create mnt/ directory for user workloads
                 (bundle_dir / "mnt").mkdir(exist_ok=True)
 
@@ -1267,13 +1298,6 @@ class NanvixPythonBuild(ZScript):
                 f"./bin/{nanvixd_name} -ramfs nanvix_rootfs.img"
                 f" -mount ./mnt -- python3.initrd"
             )
-            warm_cmd = (
-                f"./bin/{nanvixd_name} -snapshot snapshots/kernel.whp.cbor"
-                f" -ramfs nanvix_rootfs.img -mount ./mnt -- python3.initrd"
-            )
-            snap_cmd = (
-                f"./bin/{nanvixd_name} -ramfs nanvix_rootfs.img" f" -- python3.initrd"
-            )
             readme_text = (
                 f"# Nanvix Python Runtime\n\n"
                 f"Platform: {platform_name}\n"
@@ -1286,16 +1310,6 @@ class NanvixPythonBuild(ZScript):
                 f"```\n\n"
                 f"On startup CPython executes `/mnt/bootstrap.py` if present,\n"
                 f"otherwise it drops into an interactive REPL.\n\n"
-                f"## Fast Start (warm restore via snapshot)\n\n"
-                f"A pre-built snapshot is included in `snapshots/`. "
-                f"Restore from it to skip cold boot + Python initialization:\n\n"
-                f"```sh\n"
-                f"{warm_cmd}\n"
-                f"```\n\n"
-                f"To recreate the snapshot (e.g. after updating the ramfs):\n\n"
-                f"```sh\n"
-                f"{snap_cmd}\n"
-                f"```\n\n"
                 f"## Running Your Own Script\n\n"
                 f"Place a `bootstrap.py` in a directory and mount it:\n\n"
                 f"```sh\n"
@@ -1332,13 +1346,6 @@ class NanvixPythonBuild(ZScript):
                     "python3.initrd",
                 ]
             )
-            if _IS_WINDOWS:
-                required.extend(
-                    [
-                        "snapshots/kernel.vmem",
-                        "snapshots/kernel.whp.cbor",
-                    ]
-                )
         else:
             required.extend(
                 [
@@ -1436,16 +1443,9 @@ class NanvixPythonBuild(ZScript):
                 str(self._ramfs_img),
                 "-mount",
                 str(mount_dir),
+                "--",
+                str(initrd),
             ]
-
-            # Snapshot support is Windows-only (WHP).
-            snapshot_cbor = sysroot / "snapshots" / "kernel.whp.cbor"
-            if _IS_WINDOWS:
-                cmd.extend(["-kernel-args", "snapshot"])
-                if snapshot_cbor.is_file():
-                    cmd.extend(["-snapshot", str(snapshot_cbor)])
-
-            cmd.extend(["--", str(initrd)])
         else:
             cmd = [
                 nanvixd_bin,
@@ -1514,7 +1514,7 @@ class NanvixPythonBuild(ZScript):
         # Clean initrd
         self._cleanup_initrd()
 
-        # Clean snapshot artifacts
+        # Clean snapshot artifacts produced by the snapshot smoke test
         sysroot_str = self.config.get(CFG_SYSROOT, "")
         if sysroot_str:
             snapshots_dir = Path(sysroot_str) / "snapshots"
