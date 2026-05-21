@@ -851,7 +851,7 @@ class NanvixPythonBuild(ZScript):
         release = resolve_release(
             repo="nanvix/cpython",
             version_specifier=version_specifier,
-            gh_token=self.config.get("NANVIX_GH_TOKEN"),
+            gh_token=self.config.get("GH_TOKEN"),
         )
 
         asset_path = download_release_asset(
@@ -859,7 +859,7 @@ class NanvixPythonBuild(ZScript):
             version_specifier=version_specifier,
             asset_name=asset_name,
             dest=cache_dir,
-            gh_token=self.config.get("NANVIX_GH_TOKEN"),
+            gh_token=self.config.get("GH_TOKEN"),
             _release=release,
         )
 
