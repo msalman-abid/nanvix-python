@@ -974,14 +974,20 @@ class NanvixPythonBuild(ZScript):
         responsible for terminating ``proc`` afterwards.
         """
         deadline = time.monotonic() + timeout
-        # 1) Wait for both files to appear (or process to exit).
+        # 1) Wait for both files to appear.  If the process exits
+        #    before the files show up, keep polling for a short grace
+        #    period — on Windows the filesystem can lag process exit.
+        grace_deadline: float | None = None
         while time.monotonic() < deadline:
             if vmem.is_file() and cbor.is_file():
                 break
-            if proc.poll() is not None:
-                # Process exited; give the OS a moment to flush before
-                # the caller inspects the files.
-                return
+            if proc.poll() is not None and grace_deadline is None:
+                grace_deadline = min(deadline, time.monotonic() + 5.0)
+            if grace_deadline is not None and time.monotonic() >= grace_deadline:
+                log.fatal(
+                    "snapshot smoke test: process exited before snapshot files appeared",
+                    code=EXIT_TEST_FAILURE,
+                )
             time.sleep(0.1)
         else:
             log.fatal(
@@ -990,7 +996,9 @@ class NanvixPythonBuild(ZScript):
             )
 
         # 2) Wait for vmem size to stabilize (kernel may still be
-        #    flushing the memory image after cbor appears).
+        #    flushing the memory image after cbor appears).  Keep
+        #    waiting even if the process has already exited — the OS
+        #    may still be flushing buffered writes.
         last_size = -1
         stable_since: float | None = None
         while time.monotonic() < deadline:
@@ -1007,8 +1015,6 @@ class NanvixPythonBuild(ZScript):
             else:
                 last_size = size
                 stable_since = None
-            if proc.poll() is not None:
-                return
             time.sleep(0.2)
         log.fatal(
             "snapshot smoke test: generation timed out",
