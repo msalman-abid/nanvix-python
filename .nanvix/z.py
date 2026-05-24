@@ -1094,7 +1094,13 @@ class NanvixPythonBuild(ZScript):
                         proc.wait(timeout=10)
                     except subprocess.TimeoutExpired:
                         proc.kill()
-                        proc.wait(timeout=10)
+                        try:
+                            proc.wait(timeout=10)
+                        except subprocess.TimeoutExpired:
+                            log.fatal(
+                                "snapshot smoke test: nanvixd did not exit after kill() during cleanup",
+                                code=EXIT_TEST_FAILURE,
+                            )
 
         if not vmem.is_file() or not cbor.is_file():
             print(gen_log.read_text(errors="replace") if gen_log.is_file() else "")
