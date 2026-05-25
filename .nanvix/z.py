@@ -957,6 +957,70 @@ class NanvixPythonBuild(ZScript):
         else:
             log.fatal("smoke test produced no output", code=EXIT_TEST_FAILURE)
 
+    def _await_snapshot_files(
+        self,
+        proc: "subprocess.Popen[bytes]",
+        vmem: Path,
+        cbor: Path,
+        timeout: int,
+    ) -> None:
+        """Wait until snapshot files are written and stable.
+
+        On some host configurations nanvixd does not exit after the
+        guest writes its snapshot — the WHP partition is torn down but
+        the host process sits idle.  Instead of waiting for the process
+        to exit (which would hit ``timeout``), poll for both snapshot
+        files, then wait until ``vmem`` stops growing.  Callers are
+        responsible for terminating ``proc`` afterwards.
+        """
+        deadline = time.monotonic() + timeout
+        # 1) Wait for both files to appear.  If the process exits
+        #    before the files show up, keep polling for a short grace
+        #    period — on Windows the filesystem can lag process exit.
+        grace_deadline: float | None = None
+        while time.monotonic() < deadline:
+            if vmem.is_file() and cbor.is_file():
+                break
+            if proc.poll() is not None and grace_deadline is None:
+                grace_deadline = min(deadline, time.monotonic() + 5.0)
+            if grace_deadline is not None and time.monotonic() >= grace_deadline:
+                log.fatal(
+                    "snapshot smoke test: process exited before snapshot files appeared",
+                    code=EXIT_TEST_FAILURE,
+                )
+            time.sleep(0.1)
+        else:
+            log.fatal(
+                "snapshot smoke test: generation timed out",
+                code=EXIT_TEST_FAILURE,
+            )
+
+        # 2) Wait for vmem size to stabilize (kernel may still be
+        #    flushing the memory image after cbor appears).  Keep
+        #    waiting even if the process has already exited — the OS
+        #    may still be flushing buffered writes.
+        last_size = -1
+        stable_since: float | None = None
+        while time.monotonic() < deadline:
+            try:
+                size = vmem.stat().st_size
+            except OSError:
+                size = -1
+            now = time.monotonic()
+            if size == last_size and size > 0:
+                if stable_since is None:
+                    stable_since = now
+                elif now - stable_since >= 1.0:
+                    return
+            else:
+                last_size = size
+                stable_since = None
+            time.sleep(0.2)
+        log.fatal(
+            "snapshot smoke test: generation timed out",
+            code=EXIT_TEST_FAILURE,
+        )
+
     def _run_snapshot_smoke_test(self, sysroot: Path) -> None:
         """Smoke test: generate a VM snapshot then warm-restore hello-world.
 
@@ -1000,6 +1064,12 @@ class NanvixPythonBuild(ZScript):
         tmp = Path(tempfile.gettempdir())
 
         # --- Phase 1: cold boot to generate snapshot ---------------------
+        # nanvixd writes the snapshot files (kernel.vmem + kernel.whp.cbor)
+        # and the guest exits, but on some host configurations the nanvixd
+        # process itself does not return — it sits idle after the WHP
+        # partition is torn down. Rather than wait for nanvixd to exit
+        # (which would hit the per-test timeout), poll for the snapshot
+        # files, wait until they stop growing, and then terminate nanvixd.
         log.info("snapshot smoke test: generating snapshot (cold boot)")
         gen_log = tmp / "snapshot-gen.log"
         gen_cmd = [
@@ -1014,21 +1084,29 @@ class NanvixPythonBuild(ZScript):
             str(initrd),
         ]
         with gen_log.open("w") as fh:
+            proc = subprocess.Popen(
+                gen_cmd,
+                cwd=sysroot,
+                stdin=subprocess.DEVNULL,
+                stdout=fh,
+                stderr=fh,
+            )
             try:
-                subprocess.run(
-                    gen_cmd,
-                    cwd=sysroot,
-                    stdin=subprocess.DEVNULL,
-                    stdout=fh,
-                    stderr=fh,
-                    timeout=timeout,
-                )
-            except subprocess.TimeoutExpired:
-                fh.write(f"\nTIMEOUT after {timeout}s\n")
-                log.fatal(
-                    "snapshot smoke test: generation timed out",
-                    code=EXIT_TEST_FAILURE,
-                )
+                self._await_snapshot_files(proc, vmem, cbor, timeout)
+            finally:
+                if proc.poll() is None:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        try:
+                            proc.wait(timeout=10)
+                        except subprocess.TimeoutExpired:
+                            log.fatal(
+                                "snapshot smoke test: nanvixd did not exit after kill() during cleanup",
+                                code=EXIT_TEST_FAILURE,
+                            )
 
         if not vmem.is_file() or not cbor.is_file():
             print(gen_log.read_text(errors="replace") if gen_log.is_file() else "")
