@@ -225,10 +225,11 @@ class NanvixPythonBuild(ZScript):
             for src in sorted(pil_shim.rglob("*.py")):
                 h.update(src.read_bytes())
 
-        # Factor in test scripts
+        # Factor in test scripts (kept in sync with `_stage_test_scripts`,
+        # which stages `tests/func/test_*.py` plus `smoke_test_l2.py`).
         for src in sorted(sysroot.glob("smoke_test_l2.py")):
             h.update(src.read_bytes())
-        for src in sorted(sysroot.glob("test_[0-9]*.py")):
+        for src in sorted(sysroot.glob("test_*.py")):
             h.update(src.read_bytes())
 
         # Factor in _boot.py entry point
@@ -236,10 +237,54 @@ class NanvixPythonBuild(ZScript):
         if boot_script.is_file():
             h.update(boot_script.read_bytes())
 
+        # Factor in the nanvix runtime package sources (copied into
+        # sysroot/lib/python3.12/nanvix/ by _install_boot_script).  The
+        # site-packages sentinel does not cover this tree.
+        nanvix_pkg_src = self.repo_root / "lib" / "nanvix"
+        if nanvix_pkg_src.is_dir():
+            for src in sorted(nanvix_pkg_src.rglob("*")):
+                if src.is_file():
+                    h.update(str(src.relative_to(nanvix_pkg_src)).encode())
+                    h.update(src.read_bytes())
+
         return h.hexdigest()
 
     def _ensure_ramfs(self, sysroot: Path) -> Path:
-        """Build (or reuse) a ramfs image for standalone mode."""
+        """Validate that an up-to-date ramfs image exists.
+
+        Used by ``test``, ``release``, and ``benchmark``: never builds.
+        Building the ramfs requires Docker (for .pyc pre-compilation)
+        and is therefore confined to ``./z build`` via
+        :meth:`_build_ramfs`.  A missing or stale image is fatal.
+        """
+        if self._ramfs_img and self._ramfs_img.is_file():
+            return self._ramfs_img
+
+        work_dir = self.nanvix_dir
+        img = work_dir / "nanvix_rootfs.img"
+        sentinel = work_dir / ".ramfs-built"
+        current_hash = self._ramfs_input_hash(sysroot)
+
+        if not (
+            img.is_file()
+            and sentinel.is_file()
+            and sentinel.read_text().strip() == current_hash
+        ):
+            log.fatal(
+                "ramfs image missing or stale.",
+                code=EXIT_MISSING_DEP,
+                hint="Run `./z build` first (requires Docker).",
+            )
+
+        self._ramfs_img = img
+        return img
+
+    def _build_ramfs(self, sysroot: Path) -> Path:
+        """Build (or reuse) a ramfs image for standalone mode.
+
+        Only ``./z build`` may call this: it invokes Docker via
+        :meth:`_precompile_pyc` and is the sole producer of the ramfs.
+        """
         if self._ramfs_img and self._ramfs_img.is_file():
             return self._ramfs_img
 
@@ -489,13 +534,23 @@ class NanvixPythonBuild(ZScript):
         Uses ``compileall -b`` to write .pyc alongside sources, then
         removes .py files.  To avoid slow volume-mount I/O on Windows,
         the directory is tarred into the container and extracted back.
-        Falls back to skipping if Docker is not available.
+
+        Hard-fails if Docker is unavailable: the standalone ramfs ships
+        .pyc-only contents (including ``/sysroot/_boot.pyc``), so a
+        Docker-less build would produce an unusable image.  This is
+        only reachable from ``./z build`` via :meth:`_build_ramfs`;
+        ``test``/``release``/``benchmark`` go through
+        :meth:`_ensure_ramfs` and never reach here.
         """
         _DOCKER_IMAGE = "ghcr.io/nanvix/toolchain-python:latest"
 
         if shutil.which("docker") is None:
-            log.warning("Docker not available; skipping .pyc pre-compilation")
-            return
+            log.fatal(
+                "Docker is required to build the standalone ramfs "
+                "(needed to pre-compile _boot.pyc and the stdlib).",
+                code=EXIT_MISSING_DEP,
+                hint="Install Docker and rerun `./z build`.",
+            )
 
         log.info("pre-compiling .py to .pyc via Docker (Python 3.12)")
 
@@ -534,8 +589,12 @@ class NanvixPythonBuild(ZScript):
             capture_output=True,
         )
         if result.returncode != 0:
-            log.warning(f"Docker compileall failed: {result.stderr.decode().strip()}")
-            return
+            log.fatal(
+                "Docker compileall failed (rc="
+                f"{result.returncode}): {result.stderr.decode(errors='replace').strip()}",
+                code=EXIT_BUILD_FAILURE,
+                hint="Inspect the Docker output above and rerun `./z build`.",
+            )
 
         # Extract the compiled output back over pylib
         shutil.rmtree(pylib)
@@ -543,6 +602,15 @@ class NanvixPythonBuild(ZScript):
         out_buf = io.BytesIO(result.stdout)
         with tarfile.open(fileobj=out_buf, mode="r") as tf:
             tf.extractall(path=pylib, filter="data")
+
+        # Validate that the entry-point bytecode was produced; without
+        # it the standalone initrd cannot warm-start.
+        if not (pylib / "_boot.pyc").is_file():
+            log.fatal(
+                "Docker compileall did not produce _boot.pyc",
+                code=EXIT_BUILD_FAILURE,
+                hint="Inspect the Docker output above and rerun `./z build`.",
+            )
 
         count = sum(1 for _ in pylib.rglob("*.pyc"))
         log.info(f"pre-compiled {count} .pyc files (source .py removed)")
@@ -829,14 +897,29 @@ class NanvixPythonBuild(ZScript):
         # Install _boot.py warm-start entry point into sysroot root
         self._install_boot_script(sysroot)
 
+        # Stage test scripts into the sysroot so they are included in
+        # the ramfs and contribute to its input hash.  ``./z test``
+        # re-copies the same files; the hash matches so the ramfs is
+        # reused without rebuilding (and without invoking Docker).
+        self._stage_test_scripts(sysroot)
+
         # Build ramfs image for standalone deployment
         if self.config.deployment_mode == "standalone":
-            self._ensure_ramfs(sysroot)
+            self._build_ramfs(sysroot)
 
             # Build the multi-binary initrd with _boot.py as entry point
             self._ensure_initrd(sysroot)
 
         log.success("build complete")
+
+    def _stage_test_scripts(self, sysroot: Path) -> None:
+        """Copy test scripts from tests/ into the sysroot root."""
+        tests_dir = self.repo_root / "tests"
+        smoke_test = tests_dir / "smoke_test_l2.py"
+        if smoke_test.is_file():
+            shutil.copy2(smoke_test, sysroot)
+        for t in (tests_dir / "func").glob("test_*.py"):
+            shutil.copy2(t, sysroot)
 
     def test(self) -> None:
         """Run smoke and functional tests.
@@ -878,18 +961,16 @@ class NanvixPythonBuild(ZScript):
         self._install_pil_shim(site_pkg)
         self._patch_openpyxl_lxml(site_pkg)
 
-        # Copy test scripts into sysroot
-        tests_dir = self.repo_root / "tests"
-        smoke_test = tests_dir / "smoke_test_l2.py"
-        if smoke_test.is_file():
-            shutil.copy2(smoke_test, sysroot)
-        for t in (tests_dir / "func").glob("test_*.py"):
-            shutil.copy2(t, sysroot)
+        # Stage test scripts into sysroot (idempotent w.r.t. ``./z build``,
+        # which stages the same files; keeps the ramfs hash consistent).
+        self._stage_test_scripts(sysroot)
 
-        # Build ramfs for standalone mode (needed fresh each test run
-        # since test scripts are copied into it).
+        # Validate that an up-to-date ramfs image exists for standalone
+        # mode; ``_ensure_ramfs`` never rebuilds and hard-fails if the
+        # image is missing or stale (instructing the user to run
+        # ``./z build``, which is the sole Docker-using producer).
         # When NANVIX_PREBUILT_RAMFS is set (e.g. by CI to reuse the
-        # Linux-built ramfs on Windows), skip the rebuild entirely.
+        # Linux-built ramfs on Windows), skip validation entirely.
         if deployment == "standalone":
             # Install _boot.py entry point into sysroot
             self._install_boot_script(sysroot)
@@ -963,6 +1044,7 @@ class NanvixPythonBuild(ZScript):
         vmem: Path,
         cbor: Path,
         timeout: int,
+        gen_log: Path,
     ) -> None:
         """Wait until snapshot files are written and stable.
 
@@ -973,6 +1055,13 @@ class NanvixPythonBuild(ZScript):
         files, then wait until ``vmem`` stops growing.  Callers are
         responsible for terminating ``proc`` afterwards.
         """
+
+        def _dump_log() -> None:
+            # Dump captured nanvixd output so CI reveals how far cold
+            # boot got (e.g. reached `nanvix.snapshot()`, hung writing
+            # vmem, never reached the boot prompt, etc.).
+            print(gen_log.read_text(errors="replace") if gen_log.is_file() else "")
+
         deadline = time.monotonic() + timeout
         # 1) Wait for both files to appear.  If the process exits
         #    before the files show up, keep polling for a short grace
@@ -984,12 +1073,14 @@ class NanvixPythonBuild(ZScript):
             if proc.poll() is not None and grace_deadline is None:
                 grace_deadline = min(deadline, time.monotonic() + 5.0)
             if grace_deadline is not None and time.monotonic() >= grace_deadline:
+                _dump_log()
                 log.fatal(
                     "snapshot smoke test: process exited before snapshot files appeared",
                     code=EXIT_TEST_FAILURE,
                 )
             time.sleep(0.1)
         else:
+            _dump_log()
             log.fatal(
                 "snapshot smoke test: generation timed out",
                 code=EXIT_TEST_FAILURE,
@@ -1016,6 +1107,7 @@ class NanvixPythonBuild(ZScript):
                 last_size = size
                 stable_since = None
             time.sleep(0.2)
+        _dump_log()
         log.fatal(
             "snapshot smoke test: generation timed out",
             code=EXIT_TEST_FAILURE,
@@ -1092,7 +1184,7 @@ class NanvixPythonBuild(ZScript):
                 stderr=fh,
             )
             try:
-                self._await_snapshot_files(proc, vmem, cbor, timeout)
+                self._await_snapshot_files(proc, vmem, cbor, timeout, gen_log)
             finally:
                 if proc.poll() is None:
                     proc.terminate()
@@ -1344,9 +1436,11 @@ class NanvixPythonBuild(ZScript):
                     code=EXIT_MISSING_DEP,
                     hint="Run `./z setup` first.",
                 )
-            log.info("release: building ramfs image")
+            log.info("release: validating ramfs image")
             try:
-                # Install _boot.py into sysroot and build ramfs
+                # Install _boot.py into sysroot and validate the ramfs
+                # (built earlier by ``./z build``; ``_ensure_ramfs``
+                # never rebuilds and hard-fails if missing/stale).
                 self._install_boot_script(sysroot)
                 self._ensure_ramfs(sysroot)
                 if self._ramfs_img and self._ramfs_img.is_file():
