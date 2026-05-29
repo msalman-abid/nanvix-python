@@ -30,9 +30,9 @@ jobs:
     uses: nanvix/workflows/.github/workflows/nanvix-ci.yml@v2.0.2
     with:
       zutil-version: "v0.10.3"
-      platforms: "[\"microvm\"]"
-      process-modes: "[\"standalone\"]"
-      memory-sizes: "[\"256mb\"]"
+      platforms: '["microvm"]'
+      process-modes: '["standalone"]'
+      memory-sizes: '["256mb"]'
       skip-full-test-modes: "[]"
       caller-event-name: ${{ github.event_name }}
       windows-test: false
@@ -65,11 +65,11 @@ jobs:
       - name: Install nanvix-zutil
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
-          NANVIX_ZUTIL_VERSION: "v0.9.2"
         shell: pwsh
         run: |
+          $zutils_version = (Get-Content .zutils-version).Trim()
           $jq = '.assets[] | select(.name | endswith(".whl")) | .browser_download_url'
-          $wheel = gh api "repos/nanvix/zutils/releases/tags/$env:NANVIX_ZUTIL_VERSION" --jq $jq
+          $wheel = gh api "repos/nanvix/zutils/releases/tags/$zutils_version" --jq $jq
           python -m pip install $wheel
 
       - name: Setup
