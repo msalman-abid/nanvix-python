@@ -43,6 +43,7 @@ from nanvix_zutil.exitcodes import (
 )
 from nanvix_zutil.github import download_release_asset, resolve_release
 from nanvix_zutil.helpers import InitRdArgs
+from nanvix_zutil.paths import nanvix_root, repo_root
 
 # Per-test timeout in seconds (overridable via TIMEOUT_SECONDS env var).
 _DEFAULT_TIMEOUT = 300
@@ -102,7 +103,7 @@ class NanvixPythonBuild(ZScript):
 
     def _ensure_python_in_repo_root(self, sysroot: Path) -> None:
         """Copy python3.12 to repo_root for make_initrd if not already present."""
-        repo_python = self.repo_root / "python3.12"
+        repo_python = repo_root() / "python3.12"
         if repo_python.exists():
             return
         python_bin = sysroot / "bin" / "python3.12"
@@ -110,7 +111,7 @@ class NanvixPythonBuild(ZScript):
 
     def _cleanup_python_in_repo_root(self) -> None:
         """Remove the python3.12 copy from repo_root."""
-        repo_python = self.repo_root / "python3.12"
+        repo_python = repo_root() / "python3.12"
         repo_python.unlink(missing_ok=True)
 
     def _nanvix_run(
@@ -220,7 +221,7 @@ class NanvixPythonBuild(ZScript):
             h.update(site_sentinel.read_bytes())
 
         # Factor in PIL shim sources
-        pil_shim = self.repo_root / "patches" / "PIL"
+        pil_shim = repo_root() / "patches" / "PIL"
         if pil_shim.is_dir():
             for src in sorted(pil_shim.rglob("*.py")):
                 h.update(src.read_bytes())
@@ -240,7 +241,7 @@ class NanvixPythonBuild(ZScript):
         # Factor in the nanvix runtime package sources (copied into
         # sysroot/lib/python3.12/nanvix/ by _install_boot_script).  The
         # site-packages sentinel does not cover this tree.
-        nanvix_pkg_src = self.repo_root / "lib" / "nanvix"
+        nanvix_pkg_src = repo_root() / "lib" / "nanvix"
         if nanvix_pkg_src.is_dir():
             for src in sorted(nanvix_pkg_src.rglob("*")):
                 if src.is_file():
@@ -260,7 +261,7 @@ class NanvixPythonBuild(ZScript):
         if self._ramfs_img and self._ramfs_img.is_file():
             return self._ramfs_img
 
-        work_dir = self.nanvix_dir
+        work_dir = nanvix_root()
         img = work_dir / "nanvix_rootfs.img"
         sentinel = work_dir / ".ramfs-built"
         current_hash = self._ramfs_input_hash(sysroot)
@@ -288,7 +289,7 @@ class NanvixPythonBuild(ZScript):
         if self._ramfs_img and self._ramfs_img.is_file():
             return self._ramfs_img
 
-        work_dir = self.nanvix_dir
+        work_dir = nanvix_root()
         img = work_dir / "nanvix_rootfs.img"
         sentinel = work_dir / ".ramfs-built"
         current_hash = self._ramfs_input_hash(sysroot)
@@ -510,7 +511,7 @@ class NanvixPythonBuild(ZScript):
         # Place _boot.py inside pylib so it's compiled with the correct
         # Python 3.12 magic number (host Python may differ).  After
         # precompilation, move the resulting .pyc to the sysroot root.
-        boot_src = self.repo_root / "lib" / "nanvix" / "_boot.py"
+        boot_src = repo_root() / "lib" / "nanvix" / "_boot.py"
         boot_in_pylib = pylib / "_boot.py"
         if boot_src.is_file():
             shutil.copy2(boot_src, boot_in_pylib)
@@ -630,7 +631,7 @@ class NanvixPythonBuild(ZScript):
         - lib/nanvix/ → sysroot/lib/python3.12/nanvix/ (runtime package)
         - lib/nanvix/_boot.py → sysroot/_boot.py (initrd entry point)
         """
-        nanvix_pkg_src = self.repo_root / "lib" / "nanvix"
+        nanvix_pkg_src = repo_root() / "lib" / "nanvix"
         if not nanvix_pkg_src.is_dir():
             log.fatal(
                 "lib/nanvix/ not found.",
@@ -661,7 +662,8 @@ class NanvixPythonBuild(ZScript):
         initrd: Path = make_initrd(
             self,
             "python3.12",
-            InitRdArgs(
+            test=False,
+            args=InitRdArgs(
                 app_args=[
                     "-S",
                     "-O",
@@ -707,7 +709,7 @@ class NanvixPythonBuild(ZScript):
             log.warning("pip not found; skipping site-packages installation")
             return
 
-        req_dir = self.repo_root / "requirements"
+        req_dir = repo_root() / "requirements"
 
         # Compute a combined hash of all requirements files so we can
         # skip a redundant pip install when nothing changed.
@@ -755,7 +757,7 @@ class NanvixPythonBuild(ZScript):
         Replaces Pillow's C extension with lightweight header-only
         parsing that python-pptx needs for image handling.
         """
-        pil_src = self.repo_root / "patches" / "PIL"
+        pil_src = repo_root() / "patches" / "PIL"
         pil_dst = site_pkg / "PIL"
         if not pil_src.is_dir():
             log.warning("patches/PIL not found; skipping PIL shim installation")
@@ -825,7 +827,7 @@ class NanvixPythonBuild(ZScript):
             version_specifier = cpython_version
 
         asset_name = f"cpython-{machine}-{mode}-{memory}.tar.gz"
-        cache_dir = self.nanvix_dir / "cache"
+        cache_dir = nanvix_root() / "cache"
 
         # Check if already installed
         sentinel = sysroot / ".cpython-installed"
@@ -915,7 +917,7 @@ class NanvixPythonBuild(ZScript):
 
     def _stage_test_scripts(self, sysroot: Path) -> None:
         """Copy test scripts from tests/ into the sysroot root."""
-        tests_dir = self.repo_root / "tests"
+        tests_dir = repo_root() / "tests"
         smoke_test = tests_dir / "smoke_test_l2.py"
         if smoke_test.is_file():
             shutil.copy2(smoke_test, sysroot)
@@ -1365,8 +1367,8 @@ class NanvixPythonBuild(ZScript):
         memory = self.config.memory_size
         asset_prefix = f"{platform_name}-{mode}-{memory}"
 
-        dist_dir = self.repo_root / "dist"
-        bundle_root = self.nanvix_dir / "release-bundle"
+        dist_dir = repo_root() / "dist"
+        bundle_root = nanvix_root() / "release-bundle"
         bundle_dir = bundle_root / asset_prefix
 
         log.info(f"release: preparing artifacts for {asset_prefix}")
@@ -1560,7 +1562,7 @@ class NanvixPythonBuild(ZScript):
         # Expose ELF binaries in a visible directory so that CI artifact
         # upload globs (e.g. **/*.elf) can find them — hidden directories
         # like .nanvix/ are excluded by actions/upload-artifact by default.
-        elf_out = self.repo_root / "elf-binaries"
+        elf_out = repo_root() / "elf-binaries"
         if elf_out.exists():
             shutil.rmtree(elf_out)
         elf_out.mkdir()
@@ -1668,18 +1670,18 @@ class NanvixPythonBuild(ZScript):
     def clean(self) -> None:
         """Remove build artifacts."""
         # Clean release assets
-        dist_dir = self.repo_root / "dist"
+        dist_dir = repo_root() / "dist"
         if dist_dir.is_dir():
             shutil.rmtree(dist_dir)
-        release_dir = self.repo_root / "release-assets"
+        release_dir = repo_root() / "release-assets"
         if release_dir.is_dir():
             shutil.rmtree(release_dir)
 
         # Clean ramfs artifacts
         self._cleanup_ramfs()
-        ramfs_img = self.nanvix_dir / "nanvix_rootfs.img"
+        ramfs_img = nanvix_root() / "nanvix_rootfs.img"
         ramfs_img.unlink(missing_ok=True)
-        ramfs_sentinel = self.nanvix_dir / ".ramfs-built"
+        ramfs_sentinel = nanvix_root() / ".ramfs-built"
         ramfs_sentinel.unlink(missing_ok=True)
 
         # Clean initrd
