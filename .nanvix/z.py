@@ -36,6 +36,7 @@ from nanvix_zutil import (
     log,
     make_initrd,
 )
+from nanvix_zutil import paths
 from nanvix_zutil.exitcodes import (
     EXIT_BUILD_FAILURE,
     EXIT_MISSING_DEP,
@@ -1367,7 +1368,7 @@ class NanvixPythonBuild(ZScript):
         memory = self.config.memory_size
         asset_prefix = f"{platform_name}-{mode}-{memory}"
 
-        dist_dir = repo_root() / "dist"
+        dist_dir = paths.dist_dir()
         bundle_root = nanvix_root() / "release-bundle"
         bundle_dir = bundle_root / asset_prefix
 
@@ -1670,7 +1671,7 @@ class NanvixPythonBuild(ZScript):
     def clean(self) -> None:
         """Remove build artifacts."""
         # Clean release assets
-        dist_dir = repo_root() / "dist"
+        dist_dir = paths.dist_dir()
         if dist_dir.is_dir():
             shutil.rmtree(dist_dir)
         release_dir = repo_root() / "release-assets"
