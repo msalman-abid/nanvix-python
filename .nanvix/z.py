@@ -693,23 +693,7 @@ class NanvixPythonBuild(ZScript):
 
     def _install_site_packages(self, site_pkg: Path) -> None:
         """Install pip packages from requirements files into *site_pkg*."""
-        pip_cmd: list[str] | None = None
-        toolchain = self._toolchain_str()
-
-        if shutil.which("pip3"):
-            pip_cmd = ["pip3"]
-        elif Path(toolchain, "bin", "pip3").is_file():
-            pip_cmd = [str(Path(toolchain, "bin", "pip3"))]
-        elif shutil.which("python3"):
-            pip_cmd = ["python3", "-m", "pip"]
-        elif shutil.which("python"):
-            pip_cmd = ["python", "-m", "pip"]
-        elif Path(toolchain, "bin", "python3").is_file():
-            pip_cmd = [str(Path(toolchain, "bin", "python3")), "-m", "pip"]
-        else:
-            log.warning("pip not found; skipping site-packages installation")
-            return
-
+        pip_cmd = [sys.executable, "-m", "pip"]
         req_dir = repo_root() / "requirements"
 
         # Compute a combined hash of all requirements files so we can
@@ -741,6 +725,7 @@ class NanvixPythonBuild(ZScript):
                     str(req_path),
                 ],
                 capture_output=True,
+                check=True,
             )
 
         # Remove native .so/.pyd files (not usable on Nanvix)
