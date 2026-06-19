@@ -724,7 +724,6 @@ class NanvixPythonBuild(ZScript):
                     "-r",
                     str(req_path),
                 ],
-                capture_output=True,
                 check=True,
             )
 
